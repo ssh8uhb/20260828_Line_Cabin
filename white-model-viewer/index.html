@@ -1,0 +1,4188 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>建筑白模查看器</title>
+<style>
+  html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#f5f5f5;font-family:"Microsoft YaHei","PingFang SC",sans-serif;}
+  #viewer{position:fixed;inset:0;}
+  #ui{
+    position:fixed;top:12px;left:12px;z-index:10;width:230px;
+    background:rgba(255,255,255,.92);border:1px solid #ddd;border-radius:8px;
+    padding:10px 12px;box-shadow:0 2px 10px rgba(0,0,0,.08);font-size:12px;color:#333;
+  }
+  #ui h1{font-size:14px;margin:0 0 4px;font-weight:600;}
+  #ui .sub{color:#888;margin-bottom:8px;}
+  #ui .row{display:flex;align-items:center;gap:6px;margin:3px 0;cursor:pointer;}
+  #ui .row input{cursor:pointer;}
+  #stats{margin-top:8px;padding-top:8px;border-top:1px solid #eee;color:#666;line-height:1.5;max-height:160px;overflow:auto;}
+  #loadBtn{
+    display:block;width:100%;margin:6px 0;padding:6px 0;border:1px dashed #aaa;border-radius:6px;
+    background:#fafafa;color:#555;cursor:pointer;font-size:12px;
+  }
+  #loadBtn:hover{background:#f0f0f0;}
+  #fileInput{display:none;}
+  #dropzone{
+    position:fixed;inset:0;z-index:20;display:none;align-items:center;justify-content:center;
+    background:rgba(255,255,255,.92);
+  }
+  #dropzone .box{
+    border:2px dashed #999;border-radius:12px;padding:48px 60px;text-align:center;color:#666;
+    background:#fff;
+  }
+  #dropzone .box h2{margin:0 0 8px;font-weight:500;}
+  #dropzone.active{display:flex;}
+  #status{position:fixed;bottom:12px;left:50%;transform:translateX(-50%);z-index:10;color:#888;font-size:12px;background:rgba(255,255,255,.8);padding:4px 12px;border-radius:12px;}
+  #err{position:fixed;inset:0;z-index:30;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.45);color:#fff;font-size:14px;}
+  #err .msg{background:#b23;padding:16px 24px;border-radius:8px;max-width:560px;}
+  #legend{position:fixed;right:12px;bottom:12px;z-index:10;background:rgba(255,255,255,.85);border:1px solid #eee;border-radius:8px;padding:8px 10px;font-size:11px;color:#666;}
+</style>
+</head>
+<body>
+<div id="viewer"></div>
+
+<div id="ui">
+  <h1>建筑白模查看器</h1>
+  <div class="sub">PlanFundingDrawing JSON → Three.js 白模</div>
+  <button id="loadBtn">选择 / 拖入 JSON 文件</button>
+  <input type="file" id="fileInput" accept=".json,application/json">
+  <div style="margin:6px 0 2px;color:#888;">显示控制</div>
+  <label class="row"><input type="checkbox" id="chk_walls" checked> 墙体（含门窗洞口）</label>
+  <label class="row"><input type="checkbox" id="chk_slabs" checked> 楼板 / 平台</label>
+  <label class="row"><input type="checkbox" id="chk_columns" checked> 结构柱</label>
+  <label class="row"><input type="checkbox" id="chk_roof" checked> 屋面（檐口/雨篷）</label>
+  <label class="row"><input type="checkbox" id="chk_stairs" checked> 楼梯 / 爬梯</label>
+  <label class="row"><input type="checkbox" id="chk_extra" checked> 基础 / 集水坑 / 坡道</label>
+  <label class="row"><input type="checkbox" id="chk_ground" checked> 地面 / 散水</label>
+  <label class="row"><input type="checkbox" id="chk_annot" checked> 房间标注</label>
+  <div id="stats">尚未加载数据</div>
+</div>
+
+<div id="dropzone">
+  <div class="box">
+    <h2>把 JSON 文件拖到这里</h2>
+    <div>或点击左侧“选择 / 拖入 JSON 文件”</div>
+  </div>
+</div>
+
+<div id="status">左键旋转 · 右键平移 · 滚轮缩放</div>
+<div id="legend"></div>
+<div id="err"><div class="msg" id="errMsg"></div></div>
+
+<script src="lib/three.min.js"></script>
+<script src="lib/OrbitControls.js"></script>
+<script type="application/json" id="sampleData">{
+  "DrawingName": "平面图提资_20260831",
+  "DrawingPath": "C:\\项目\\项目01\\提资文件\\建筑\\平面图提资_20260831.dwg",
+  "SourceDrawingPath": null,
+  "WaterMachineSourceDrawingPath": "C:\\项目\\项目01\\提资文件\\水机\\水泵房提资图生成.dwg",
+  "ElectricalSourceDrawingPath": "C:\\项目\\项目01\\提资文件\\电气\\电气平面图提资(1).dwg",
+  "IntakePoolChannelSlopeParameters": {
+    "SlopeHeightAMm": 1000.0,
+    "SlopeLengthBMm": 5000.0
+  },
+  "DrawElementBounds": false,
+  "ViewFrames": [
+    {
+      "Source": null,
+      "ViewKind": 3,
+      "ViewTypeName": "水泵间平面图",
+      "Bounds": {
+        "Min": {
+          "X": 0.0,
+          "Y": 0.0
+        },
+        "Max": {
+          "X": 42000.0,
+          "Y": 29700.0
+        }
+      },
+      "LeftBottomPoint": {
+        "X": 0.0,
+        "Y": 0.0
+      },
+      "Elements": [
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.BottomStairFlightObject, LZ.ViewPlanCreate",
+          "InsertionPoint": {
+            "X": 29862.625383530059,
+            "Y": 12280.000000001251
+          },
+          "Direction": {
+            "X": 1.0,
+            "Y": 0.0
+          },
+          "Bounds": {
+            "Min": {
+              "X": 29862.625383530059,
+              "Y": 12280.000000001251
+            },
+            "Max": {
+              "X": 29862.625383530059,
+              "Y": 12280.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.AxisObject, LZ.ViewPlanCreate",
+          "LocationLine": {
+            "Start": {
+              "X": 26062.625383530059,
+              "Y": 7380.0000000012515
+            },
+            "End": {
+              "X": 33262.625383530059,
+              "Y": 7380.0000000012515
+            }
+          },
+          "Number": "A",
+          "Bounds": {
+            "Min": {
+              "X": 20262.625383530059,
+              "Y": 6980.0000000012515
+            },
+            "Max": {
+              "X": 39062.625383530059,
+              "Y": 7780.0000000012515
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.AxisObject, LZ.ViewPlanCreate",
+          "LocationLine": {
+            "Start": {
+              "X": 33162.625383530059,
+              "Y": 7280.0000000012515
+            },
+            "End": {
+              "X": 33162.625383530059,
+              "Y": 22380.000000001251
+            }
+          },
+          "Number": "2",
+          "Bounds": {
+            "Min": {
+              "X": 32762.625383530059,
+              "Y": 1480.0000000012515
+            },
+            "Max": {
+              "X": 33562.625383530059,
+              "Y": 28180.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.AxisObject, LZ.ViewPlanCreate",
+          "LocationLine": {
+            "Start": {
+              "X": 33262.625383530059,
+              "Y": 22280.000000001251
+            },
+            "End": {
+              "X": 26062.625383530059,
+              "Y": 22280.000000001251
+            }
+          },
+          "Number": "D",
+          "Bounds": {
+            "Min": {
+              "X": 20262.625383530059,
+              "Y": 21880.000000001251
+            },
+            "Max": {
+              "X": 39062.625383530059,
+              "Y": 22680.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.AxisObject, LZ.ViewPlanCreate",
+          "LocationLine": {
+            "Start": {
+              "X": 26162.625383530059,
+              "Y": 22380.000000001251
+            },
+            "End": {
+              "X": 26162.625383530059,
+              "Y": 7280.0000000012515
+            }
+          },
+          "Number": "1",
+          "Bounds": {
+            "Min": {
+              "X": 25762.625383530059,
+              "Y": 1480.0000000012515
+            },
+            "Max": {
+              "X": 26562.625383530059,
+              "Y": 28180.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.AxisObject, LZ.ViewPlanCreate",
+          "LocationLine": {
+            "Start": {
+              "X": 26062.625383530059,
+              "Y": 12180.000000001251
+            },
+            "End": {
+              "X": 33262.625383530059,
+              "Y": 12180.000000001251
+            }
+          },
+          "Number": "B",
+          "Bounds": {
+            "Min": {
+              "X": 20262.625383530059,
+              "Y": 11780.000000001251
+            },
+            "Max": {
+              "X": 39062.625383530059,
+              "Y": 12580.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.AxisObject, LZ.ViewPlanCreate",
+          "LocationLine": {
+            "Start": {
+              "X": 26062.625383530059,
+              "Y": 17280.000000001251
+            },
+            "End": {
+              "X": 33262.625383530059,
+              "Y": 17280.000000001251
+            }
+          },
+          "Number": "C",
+          "Bounds": {
+            "Min": {
+              "X": 20262.625383530059,
+              "Y": 16880.000000001251
+            },
+            "Max": {
+              "X": 39062.625383530059,
+              "Y": 17680.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.StructuralColumnObject, LZ.ViewPlanCreate",
+          "InsertionPoint": {
+            "X": 26262.625383530059,
+            "Y": 7480.0000000012515
+          },
+          "Length": 400.0,
+          "Width": 400.0,
+          "Bounds": {
+            "Min": {
+              "X": 26062.625383530059,
+              "Y": 7280.0000000012515
+            },
+            "Max": {
+              "X": 26462.625383530059,
+              "Y": 7680.0000000012515
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.StructuralColumnObject, LZ.ViewPlanCreate",
+          "InsertionPoint": {
+            "X": 26262.625383530059,
+            "Y": 12180.000000001251
+          },
+          "Length": 400.0,
+          "Width": 400.0,
+          "Bounds": {
+            "Min": {
+              "X": 26062.625383530059,
+              "Y": 11980.000000001251
+            },
+            "Max": {
+              "X": 26462.625383530059,
+              "Y": 12380.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.StructuralColumnObject, LZ.ViewPlanCreate",
+          "InsertionPoint": {
+            "X": 26262.625383530059,
+            "Y": 17280.000000001251
+          },
+          "Length": 400.0,
+          "Width": 400.0,
+          "Bounds": {
+            "Min": {
+              "X": 26062.625383530059,
+              "Y": 17080.000000001251
+            },
+            "Max": {
+              "X": 26462.625383530059,
+              "Y": 17480.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.StructuralColumnObject, LZ.ViewPlanCreate",
+          "InsertionPoint": {
+            "X": 26262.625383530059,
+            "Y": 22180.000000001251
+          },
+          "Length": 400.0,
+          "Width": 400.0,
+          "Bounds": {
+            "Min": {
+              "X": 26062.625383530059,
+              "Y": 21980.000000001251
+            },
+            "Max": {
+              "X": 26462.625383530059,
+              "Y": 22380.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.StructuralColumnObject, LZ.ViewPlanCreate",
+          "InsertionPoint": {
+            "X": 33062.625383530059,
+            "Y": 7480.0000000012515
+          },
+          "Length": 400.0,
+          "Width": 400.0,
+          "Bounds": {
+            "Min": {
+              "X": 32862.625383530059,
+              "Y": 7280.0000000012515
+            },
+            "Max": {
+              "X": 33262.625383530059,
+              "Y": 7680.0000000012515
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.StructuralColumnObject, LZ.ViewPlanCreate",
+          "InsertionPoint": {
+            "X": 33062.625383530059,
+            "Y": 12180.000000001251
+          },
+          "Length": 400.0,
+          "Width": 400.0,
+          "Bounds": {
+            "Min": {
+              "X": 32862.625383530059,
+              "Y": 11980.000000001251
+            },
+            "Max": {
+              "X": 33262.625383530059,
+              "Y": 12380.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.StructuralColumnObject, LZ.ViewPlanCreate",
+          "InsertionPoint": {
+            "X": 33062.625383530059,
+            "Y": 17280.000000001251
+          },
+          "Length": 400.0,
+          "Width": 400.0,
+          "Bounds": {
+            "Min": {
+              "X": 32862.625383530059,
+              "Y": 17080.000000001251
+            },
+            "Max": {
+              "X": 33262.625383530059,
+              "Y": 17480.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.StructuralColumnObject, LZ.ViewPlanCreate",
+          "InsertionPoint": {
+            "X": 33062.625383530059,
+            "Y": 22180.000000001251
+          },
+          "Length": 400.0,
+          "Width": 400.0,
+          "Bounds": {
+            "Min": {
+              "X": 32862.625383530059,
+              "Y": 21980.000000001251
+            },
+            "Max": {
+              "X": 33262.625383530059,
+              "Y": 22380.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.PumpFoundationObject, LZ.ViewPlanCreate",
+          "Bounds": {
+            "Min": {
+              "X": 28912.625383530059,
+              "Y": 18720.000000000524
+            },
+            "Max": {
+              "X": 29912.625383530059,
+              "Y": 19720.000000000524
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.PumpFoundationObject, LZ.ViewPlanCreate",
+          "Bounds": {
+            "Min": {
+              "X": 28912.625383530059,
+              "Y": 17220.000000002125
+            },
+            "Max": {
+              "X": 29912.625383530059,
+              "Y": 18220.000000002125
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.PumpFoundationObject, LZ.ViewPlanCreate",
+          "Bounds": {
+            "Min": {
+              "X": 28822.62538353003,
+              "Y": 15829.999999998283
+            },
+            "Max": {
+              "X": 29752.62538353003,
+              "Y": 16759.999999998283
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.PumpFoundationObject, LZ.ViewPlanCreate",
+          "Bounds": {
+            "Min": {
+              "X": 28822.62538353003,
+              "Y": 14480.000000001251
+            },
+            "Max": {
+              "X": 29752.62538353003,
+              "Y": 15410.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.PlanMultilineTextObject, LZ.ViewPlanCreate",
+          "Text": "设备基础",
+          "InsertionPoint": {
+            "X": 29412.625383530059,
+            "Y": 19220.000000000524
+          },
+          "ApplyOcclusion": false,
+          "Bounds": {
+            "Min": {
+              "X": 28912.625383530059,
+              "Y": 18720.000000000524
+            },
+            "Max": {
+              "X": 29912.625383530059,
+              "Y": 19720.000000000524
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.PlanMultilineTextObject, LZ.ViewPlanCreate",
+          "Text": "设备基础",
+          "InsertionPoint": {
+            "X": 29412.625383530059,
+            "Y": 17720.000000002125
+          },
+          "ApplyOcclusion": false,
+          "Bounds": {
+            "Min": {
+              "X": 28912.625383530059,
+              "Y": 17220.000000002125
+            },
+            "Max": {
+              "X": 29912.625383530059,
+              "Y": 18220.000000002125
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.PlanMultilineTextObject, LZ.ViewPlanCreate",
+          "Text": "设备基础",
+          "InsertionPoint": {
+            "X": 29287.62538353003,
+            "Y": 16294.999999998283
+          },
+          "ApplyOcclusion": false,
+          "Bounds": {
+            "Min": {
+              "X": 28822.62538353003,
+              "Y": 15829.999999998283
+            },
+            "Max": {
+              "X": 29752.62538353003,
+              "Y": 16759.999999998283
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.PlanMultilineTextObject, LZ.ViewPlanCreate",
+          "Text": "设备基础",
+          "InsertionPoint": {
+            "X": 29287.62538353003,
+            "Y": 14945.000000001251
+          },
+          "ApplyOcclusion": false,
+          "Bounds": {
+            "Min": {
+              "X": 28822.62538353003,
+              "Y": 14480.000000001251
+            },
+            "Max": {
+              "X": 29752.62538353003,
+              "Y": 15410.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.PlanMultilineTextObject, LZ.ViewPlanCreate",
+          "Text": "集水坑",
+          "InsertionPoint": {
+            "X": 26962.625383530059,
+            "Y": 13080.000000001251
+          },
+          "ApplyOcclusion": false,
+          "Bounds": {
+            "Min": {
+              "X": 26462.625383530059,
+              "Y": 12580.000000001251
+            },
+            "Max": {
+              "X": 27462.625383530059,
+              "Y": 13580.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.PlanMultilineTextObject, LZ.ViewPlanCreate",
+          "Text": "水泵间",
+          "InsertionPoint": {
+            "X": 29662.625383530059,
+            "Y": 21380.000000001251
+          },
+          "ApplyOcclusion": false,
+          "Bounds": {
+            "Min": {
+              "X": 26262.625383530059,
+              "Y": 12280.000000001251
+            },
+            "Max": {
+              "X": 33062.625383530059,
+              "Y": 22180.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.PlanElevationAnnotationObject, LZ.ViewPlanCreate",
+          "Kind": 5,
+          "InsertionPoint": {
+            "X": 27202.625383530059,
+            "Y": 17045.000000000546
+          },
+          "ElevationMm": 167659.0,
+          "TextSuffix": "",
+          "Bounds": {
+            "Min": {
+              "X": 27202.625383530059,
+              "Y": 17045.000000000546
+            },
+            "Max": {
+              "X": 27202.625383530059,
+              "Y": 17045.000000000546
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.PlanElevationAnnotationObject, LZ.ViewPlanCreate",
+          "Kind": 0,
+          "InsertionPoint": {
+            "X": 29662.625383530059,
+            "Y": 20380.000000001251
+          },
+          "ElevationMm": 166759.0,
+          "TextSuffix": "（结构）",
+          "Bounds": {
+            "Min": {
+              "X": 29662.625383530059,
+              "Y": 20380.000000001251
+            },
+            "Max": {
+              "X": 29662.625383530059,
+              "Y": 20380.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.SteelLadderObject, LZ.ViewPlanCreate",
+          "InsertionPoint": {
+            "X": 31362.625383530059,
+            "Y": 22180.000000001251
+          },
+          "FacingNormal": {
+            "X": 0.0,
+            "Y": -1.0
+          },
+          "Bounds": {
+            "Min": {
+              "X": 31362.625383530059,
+              "Y": 22180.000000001251
+            },
+            "Max": {
+              "X": 31362.625383530059,
+              "Y": 22180.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.SteelStairObject, LZ.ViewPlanCreate",
+          "InsertionPoint": {
+            "X": 27962.625383530059,
+            "Y": 15619.999999999767
+          },
+          "Bounds": {
+            "Min": {
+              "X": 27502.625383530059,
+              "Y": 15319.999999999767
+            },
+            "Max": {
+              "X": 27962.625383530059,
+              "Y": 15919.999999999767
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.SteelStairObject, LZ.ViewPlanCreate",
+          "InsertionPoint": {
+            "X": 27962.625383530059,
+            "Y": 16990.000000000204
+          },
+          "Bounds": {
+            "Min": {
+              "X": 27502.625383530059,
+              "Y": 16690.000000000204
+            },
+            "Max": {
+              "X": 27962.625383530059,
+              "Y": 17290.000000000204
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.SteelStairObject, LZ.ViewPlanCreate",
+          "InsertionPoint": {
+            "X": 27962.625383530059,
+            "Y": 18470.000000001324
+          },
+          "Bounds": {
+            "Min": {
+              "X": 27502.625383530059,
+              "Y": 18170.000000001324
+            },
+            "Max": {
+              "X": 27962.625383530059,
+              "Y": 18770.000000001324
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.SteelStairPlatformObject, LZ.ViewPlanCreate",
+          "Bounds": {
+            "Min": {
+              "X": 26902.625383530059,
+              "Y": 15319.999999999767
+            },
+            "Max": {
+              "X": 27502.625383530059,
+              "Y": 18770.000000001324
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.SumpPitObject, LZ.ViewPlanCreate",
+          "ElevationMm": 165259.0,
+          "ApplyOcclusion": false,
+          "Bounds": {
+            "Min": {
+              "X": 26462.625383530059,
+              "Y": 12580.000000001251
+            },
+            "Max": {
+              "X": 27462.625383530059,
+              "Y": 13580.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.DrainageTrenchObject, LZ.ViewPlanCreate",
+          "BoundaryLines": [
+            {
+              "Start": {
+                "X": 27362.625383530059,
+                "Y": 13580.000000001251
+              },
+              "End": {
+                "X": 27462.625383530059,
+                "Y": 13580.000000001251
+              }
+            },
+            {
+              "Start": {
+                "X": 27462.625383530059,
+                "Y": 14380.000000001251
+              },
+              "End": {
+                "X": 29852.62538353003,
+                "Y": 14380.000000001251
+              }
+            },
+            {
+              "Start": {
+                "X": 27362.625383530059,
+                "Y": 14480.000000001251
+              },
+              "End": {
+                "X": 28722.62538353003,
+                "Y": 14480.000000001251
+              }
+            },
+            {
+              "Start": {
+                "X": 28822.62538353003,
+                "Y": 14480.000000001251
+              },
+              "End": {
+                "X": 29752.62538353003,
+                "Y": 14480.000000001251
+              }
+            },
+            {
+              "Start": {
+                "X": 28822.62538353003,
+                "Y": 15410.000000001251
+              },
+              "End": {
+                "X": 29752.62538353003,
+                "Y": 15410.000000001251
+              }
+            },
+            {
+              "Start": {
+                "X": 28822.62538353003,
+                "Y": 15510.000000001251
+              },
+              "End": {
+                "X": 29852.62538353003,
+                "Y": 15510.000000001251
+              }
+            },
+            {
+              "Start": {
+                "X": 28822.62538353003,
+                "Y": 15729.999999998283
+              },
+              "End": {
+                "X": 29852.62538353003,
+                "Y": 15729.999999998283
+              }
+            },
+            {
+              "Start": {
+                "X": 28822.62538353003,
+                "Y": 15829.999999998283
+              },
+              "End": {
+                "X": 29752.62538353003,
+                "Y": 15829.999999998283
+              }
+            },
+            {
+              "Start": {
+                "X": 28822.62538353003,
+                "Y": 16759.999999998283
+              },
+              "End": {
+                "X": 29752.62538353003,
+                "Y": 16759.999999998283
+              }
+            },
+            {
+              "Start": {
+                "X": 28722.62538353003,
+                "Y": 16859.999999998283
+              },
+              "End": {
+                "X": 28812.625383530059,
+                "Y": 16859.999999998283
+              }
+            },
+            {
+              "Start": {
+                "X": 28912.625383530059,
+                "Y": 16859.999999998283
+              },
+              "End": {
+                "X": 29852.62538353003,
+                "Y": 16859.999999998283
+              }
+            },
+            {
+              "Start": {
+                "X": 28912.625383530059,
+                "Y": 17120.000000002125
+              },
+              "End": {
+                "X": 30012.625383530059,
+                "Y": 17120.000000002125
+              }
+            },
+            {
+              "Start": {
+                "X": 28912.625383530059,
+                "Y": 17220.000000002125
+              },
+              "End": {
+                "X": 29912.625383530059,
+                "Y": 17220.000000002125
+              }
+            },
+            {
+              "Start": {
+                "X": 28912.625383530059,
+                "Y": 18220.000000002125
+              },
+              "End": {
+                "X": 29912.625383530059,
+                "Y": 18220.000000002125
+              }
+            },
+            {
+              "Start": {
+                "X": 28912.625383530059,
+                "Y": 18320.000000002125
+              },
+              "End": {
+                "X": 30012.625383530059,
+                "Y": 18320.000000002125
+              }
+            },
+            {
+              "Start": {
+                "X": 28912.625383530059,
+                "Y": 18620.000000000524
+              },
+              "End": {
+                "X": 30012.625383530059,
+                "Y": 18620.000000000524
+              }
+            },
+            {
+              "Start": {
+                "X": 28912.625383530059,
+                "Y": 18720.000000000524
+              },
+              "End": {
+                "X": 29912.625383530059,
+                "Y": 18720.000000000524
+              }
+            },
+            {
+              "Start": {
+                "X": 28912.625383530059,
+                "Y": 19720.000000000524
+              },
+              "End": {
+                "X": 29912.625383530059,
+                "Y": 19720.000000000524
+              }
+            },
+            {
+              "Start": {
+                "X": 28812.625383530059,
+                "Y": 19820.000000000524
+              },
+              "End": {
+                "X": 30012.625383530059,
+                "Y": 19820.000000000524
+              }
+            },
+            {
+              "Start": {
+                "X": 27362.625383530059,
+                "Y": 13580.000000001251
+              },
+              "End": {
+                "X": 27362.625383530059,
+                "Y": 14480.000000001251
+              }
+            },
+            {
+              "Start": {
+                "X": 27462.625383530059,
+                "Y": 13580.000000001251
+              },
+              "End": {
+                "X": 27462.625383530059,
+                "Y": 14380.000000001251
+              }
+            },
+            {
+              "Start": {
+                "X": 28722.62538353003,
+                "Y": 14480.000000001251
+              },
+              "End": {
+                "X": 28722.62538353003,
+                "Y": 16859.999999998283
+              }
+            },
+            {
+              "Start": {
+                "X": 28812.625383530059,
+                "Y": 16859.999999998283
+              },
+              "End": {
+                "X": 28812.625383530059,
+                "Y": 19820.000000000524
+              }
+            },
+            {
+              "Start": {
+                "X": 28822.62538353003,
+                "Y": 14480.000000001251
+              },
+              "End": {
+                "X": 28822.62538353003,
+                "Y": 15410.000000001251
+              }
+            },
+            {
+              "Start": {
+                "X": 28822.62538353003,
+                "Y": 15510.000000001251
+              },
+              "End": {
+                "X": 28822.62538353003,
+                "Y": 15729.999999998283
+              }
+            },
+            {
+              "Start": {
+                "X": 28822.62538353003,
+                "Y": 15829.999999998283
+              },
+              "End": {
+                "X": 28822.62538353003,
+                "Y": 16759.999999998283
+              }
+            },
+            {
+              "Start": {
+                "X": 28912.625383530059,
+                "Y": 16859.999999998283
+              },
+              "End": {
+                "X": 28912.625383530059,
+                "Y": 17120.000000002125
+              }
+            },
+            {
+              "Start": {
+                "X": 28912.625383530059,
+                "Y": 17220.000000002125
+              },
+              "End": {
+                "X": 28912.625383530059,
+                "Y": 18220.000000002125
+              }
+            },
+            {
+              "Start": {
+                "X": 28912.625383530059,
+                "Y": 18320.000000002125
+              },
+              "End": {
+                "X": 28912.625383530059,
+                "Y": 18620.000000000524
+              }
+            },
+            {
+              "Start": {
+                "X": 28912.625383530059,
+                "Y": 18720.000000000524
+              },
+              "End": {
+                "X": 28912.625383530059,
+                "Y": 19720.000000000524
+              }
+            },
+            {
+              "Start": {
+                "X": 29752.62538353003,
+                "Y": 14480.000000001251
+              },
+              "End": {
+                "X": 29752.62538353003,
+                "Y": 15410.000000001251
+              }
+            },
+            {
+              "Start": {
+                "X": 29752.62538353003,
+                "Y": 15829.999999998283
+              },
+              "End": {
+                "X": 29752.62538353003,
+                "Y": 16759.999999998283
+              }
+            },
+            {
+              "Start": {
+                "X": 29852.62538353003,
+                "Y": 14380.000000001251
+              },
+              "End": {
+                "X": 29852.62538353003,
+                "Y": 15510.000000001251
+              }
+            },
+            {
+              "Start": {
+                "X": 29852.62538353003,
+                "Y": 15729.999999998283
+              },
+              "End": {
+                "X": 29852.62538353003,
+                "Y": 16859.999999998283
+              }
+            },
+            {
+              "Start": {
+                "X": 29912.625383530059,
+                "Y": 17220.000000002125
+              },
+              "End": {
+                "X": 29912.625383530059,
+                "Y": 18220.000000002125
+              }
+            },
+            {
+              "Start": {
+                "X": 29912.625383530059,
+                "Y": 18720.000000000524
+              },
+              "End": {
+                "X": 29912.625383530059,
+                "Y": 19720.000000000524
+              }
+            },
+            {
+              "Start": {
+                "X": 30012.625383530059,
+                "Y": 17120.000000002125
+              },
+              "End": {
+                "X": 30012.625383530059,
+                "Y": 18320.000000002125
+              }
+            },
+            {
+              "Start": {
+                "X": 30012.625383530059,
+                "Y": 18620.000000000524
+              },
+              "End": {
+                "X": 30012.625383530059,
+                "Y": 19820.000000000524
+              }
+            }
+          ],
+          "ApplyOcclusion": false,
+          "Bounds": {
+            "Min": {
+              "X": 27362.625383530059,
+              "Y": 13580.000000001251
+            },
+            "Max": {
+              "X": 30012.625383530059,
+              "Y": 19820.000000000524
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.WallObject, LZ.ViewPlanCreate",
+          "Kind": 0,
+          "GenerateHatch": true,
+          "Outline": [
+            {
+              "X": 26062.625383530059,
+              "Y": 12080.000000001251
+            },
+            {
+              "X": 26062.625383530059,
+              "Y": 22380.000000001251
+            },
+            {
+              "X": 26262.625383530059,
+              "Y": 22380.000000001251
+            },
+            {
+              "X": 26262.625383530059,
+              "Y": 12080.000000001251
+            }
+          ],
+          "Bounds": {
+            "Min": {
+              "X": 26062.625383530059,
+              "Y": 12080.000000001251
+            },
+            "Max": {
+              "X": 26262.625383530059,
+              "Y": 22380.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.WallObject, LZ.ViewPlanCreate",
+          "Kind": 0,
+          "GenerateHatch": true,
+          "Outline": [
+            {
+              "X": 33062.625383530059,
+              "Y": 12080.000000001251
+            },
+            {
+              "X": 33062.625383530059,
+              "Y": 22380.000000001251
+            },
+            {
+              "X": 33262.625383530059,
+              "Y": 22380.000000001251
+            },
+            {
+              "X": 33262.625383530059,
+              "Y": 12080.000000001251
+            }
+          ],
+          "Bounds": {
+            "Min": {
+              "X": 33062.625383530059,
+              "Y": 12080.000000001251
+            },
+            "Max": {
+              "X": 33262.625383530059,
+              "Y": 22380.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.WallObject, LZ.ViewPlanCreate",
+          "Kind": 0,
+          "GenerateHatch": true,
+          "Outline": [
+            {
+              "X": 26062.625383530059,
+              "Y": 12280.000000001251
+            },
+            {
+              "X": 33262.625383530059,
+              "Y": 12280.000000001251
+            },
+            {
+              "X": 33262.625383530059,
+              "Y": 12080.000000001251
+            },
+            {
+              "X": 26062.625383530059,
+              "Y": 12080.000000001251
+            }
+          ],
+          "Bounds": {
+            "Min": {
+              "X": 26062.625383530059,
+              "Y": 12080.000000001251
+            },
+            "Max": {
+              "X": 33262.625383530059,
+              "Y": 12280.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.WallObject, LZ.ViewPlanCreate",
+          "Kind": 0,
+          "GenerateHatch": true,
+          "Outline": [
+            {
+              "X": 26062.625383530059,
+              "Y": 22380.000000001251
+            },
+            {
+              "X": 33262.625383530059,
+              "Y": 22380.000000001251
+            },
+            {
+              "X": 33262.625383530059,
+              "Y": 22180.000000001251
+            },
+            {
+              "X": 26062.625383530059,
+              "Y": 22180.000000001251
+            }
+          ],
+          "Bounds": {
+            "Min": {
+              "X": 26062.625383530059,
+              "Y": 22180.000000001251
+            },
+            "Max": {
+              "X": 33262.625383530059,
+              "Y": 22380.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.RoomOutlineObject, LZ.ViewPlanCreate",
+          "RoomName": "水泵间",
+          "Outline": [
+            {
+              "X": 26262.625383530059,
+              "Y": 12280.000000001251
+            },
+            {
+              "X": 26262.625383530059,
+              "Y": 22180.000000001251
+            },
+            {
+              "X": 33062.625383530059,
+              "Y": 22180.000000001251
+            },
+            {
+              "X": 33062.625383530059,
+              "Y": 12280.000000001251
+            }
+          ],
+          "Bounds": {
+            "Min": {
+              "X": 26262.625383530059,
+              "Y": 12280.000000001251
+            },
+            "Max": {
+              "X": 33062.625383530059,
+              "Y": 22180.000000001251
+            }
+          }
+        }
+      ]
+    },
+    {
+      "Source": null,
+      "ViewKind": 4,
+      "ViewTypeName": "配电间平面图",
+      "Bounds": {
+        "Min": {
+          "X": 42000.0,
+          "Y": 0.0
+        },
+        "Max": {
+          "X": 84000.0,
+          "Y": 29700.0
+        }
+      },
+      "LeftBottomPoint": {
+        "X": 42000.0,
+        "Y": 0.0
+      },
+      "Elements": [
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.PumpRoomObject, LZ.ViewPlanCreate",
+          "InsertionPoint": {
+            "X": 59962.625383530059,
+            "Y": 14244.999999998981
+          },
+          "Bounds": {
+            "Min": {
+              "X": 58962.625383530059,
+              "Y": 13244.99999999901
+            },
+            "Max": {
+              "X": 75800.125383530059,
+              "Y": 25790.999999999014
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.ElectricalRoomObject, LZ.ViewPlanCreate",
+          "RoomKind": 0,
+          "PlaceContentCentroidAtTop": true,
+          "InsertionPoint": {
+            "X": 68562.625383530059,
+            "Y": 12080.000000001251
+          },
+          "Bounds": {
+            "Min": {
+              "X": 68562.625383530059,
+              "Y": 8580.0000000012515
+            },
+            "Max": {
+              "X": 71162.625383530059,
+              "Y": 12080.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.ElectricalRoomObject, LZ.ViewPlanCreate",
+          "RoomKind": 1,
+          "PlaceContentCentroidAtTop": true,
+          "InsertionPoint": {
+            "X": 71362.625383530059,
+            "Y": 12080.000000001251
+          },
+          "Bounds": {
+            "Min": {
+              "X": 71362.625383530059,
+              "Y": 7680.0000000012515
+            },
+            "Max": {
+              "X": 74862.625383530059,
+              "Y": 12080.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.PlanElevationAnnotationObject, LZ.ViewPlanCreate",
+          "Kind": 3,
+          "InsertionPoint": {
+            "X": 77062.625383530059,
+            "Y": 5780.0000000012515
+          },
+          "ElevationMm": 168900.0,
+          "TextSuffix": "",
+          "Bounds": {
+            "Min": {
+              "X": 77062.625383530059,
+              "Y": 5780.0000000012515
+            },
+            "Max": {
+              "X": 77062.625383530059,
+              "Y": 5780.0000000012515
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.StairObject, LZ.ViewPlanCreate",
+          "IsSingleFlight": true,
+          "InsertionPoint": {
+            "X": 73362.625383530059,
+            "Y": 12280.000000001251
+          },
+          "FirstFlightStepCount": 5,
+          "SecondFlightStepCount": 0,
+          "FirstFlightLength": 1500.0,
+          "SecondFlightLength": 0.0,
+          "Bounds": {
+            "Min": {
+              "X": 71862.625383530059,
+              "Y": 12280.000000001251
+            },
+            "Max": {
+              "X": 73362.625383530059,
+              "Y": 13480.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.SteelStairObject, LZ.ViewPlanCreate",
+          "InsertionPoint": {
+            "X": 69962.625383530059,
+            "Y": 15619.999999999767
+          },
+          "Bounds": {
+            "Min": {
+              "X": 69502.625383530059,
+              "Y": 15319.999999999767
+            },
+            "Max": {
+              "X": 69962.625383530059,
+              "Y": 15919.999999999767
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.SteelStairObject, LZ.ViewPlanCreate",
+          "InsertionPoint": {
+            "X": 69962.625383530059,
+            "Y": 16990.000000000204
+          },
+          "Bounds": {
+            "Min": {
+              "X": 69502.625383530059,
+              "Y": 16690.000000000204
+            },
+            "Max": {
+              "X": 69962.625383530059,
+              "Y": 17290.000000000204
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.SteelStairObject, LZ.ViewPlanCreate",
+          "InsertionPoint": {
+            "X": 69962.625383530059,
+            "Y": 18470.000000001324
+          },
+          "Bounds": {
+            "Min": {
+              "X": 69502.625383530059,
+              "Y": 18170.000000001324
+            },
+            "Max": {
+              "X": 69962.625383530059,
+              "Y": 18770.000000001324
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.SteelStairPlatformObject, LZ.ViewPlanCreate",
+          "Bounds": {
+            "Min": {
+              "X": 68902.625383530059,
+              "Y": 15319.999999999767
+            },
+            "Max": {
+              "X": 69502.625383530059,
+              "Y": 18770.000000001324
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.PlanElevationAnnotationObject, LZ.ViewPlanCreate",
+          "Kind": 5,
+          "InsertionPoint": {
+            "X": 69202.625383530059,
+            "Y": 17045.000000000546
+          },
+          "ElevationMm": 167659.0,
+          "TextSuffix": "",
+          "Bounds": {
+            "Min": {
+              "X": 69202.625383530059,
+              "Y": 17045.000000000546
+            },
+            "Max": {
+              "X": 69202.625383530059,
+              "Y": 17045.000000000546
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.PumpFoundationObject, LZ.ViewPlanCreate",
+          "Bounds": {
+            "Min": {
+              "X": 70912.625383530059,
+              "Y": 18720.000000000524
+            },
+            "Max": {
+              "X": 71912.625383530059,
+              "Y": 19720.000000000524
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.PlanMultilineTextObject, LZ.ViewPlanCreate",
+          "Text": "设备基础",
+          "InsertionPoint": {
+            "X": 71412.625383530059,
+            "Y": 19220.000000000524
+          },
+          "ApplyOcclusion": false,
+          "Bounds": {
+            "Min": {
+              "X": 70912.625383530059,
+              "Y": 18720.000000000524
+            },
+            "Max": {
+              "X": 71912.625383530059,
+              "Y": 19720.000000000524
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.PumpFoundationObject, LZ.ViewPlanCreate",
+          "Bounds": {
+            "Min": {
+              "X": 70912.625383530059,
+              "Y": 17220.000000002125
+            },
+            "Max": {
+              "X": 71912.625383530059,
+              "Y": 18220.000000002125
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.PlanMultilineTextObject, LZ.ViewPlanCreate",
+          "Text": "设备基础",
+          "InsertionPoint": {
+            "X": 71412.625383530059,
+            "Y": 17720.000000002125
+          },
+          "ApplyOcclusion": false,
+          "Bounds": {
+            "Min": {
+              "X": 70912.625383530059,
+              "Y": 17220.000000002125
+            },
+            "Max": {
+              "X": 71912.625383530059,
+              "Y": 18220.000000002125
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.PumpFoundationObject, LZ.ViewPlanCreate",
+          "Bounds": {
+            "Min": {
+              "X": 70822.62538353003,
+              "Y": 15829.999999998283
+            },
+            "Max": {
+              "X": 71752.62538353003,
+              "Y": 16759.999999998283
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.PlanMultilineTextObject, LZ.ViewPlanCreate",
+          "Text": "设备基础",
+          "InsertionPoint": {
+            "X": 71287.62538353003,
+            "Y": 16294.999999998283
+          },
+          "ApplyOcclusion": false,
+          "Bounds": {
+            "Min": {
+              "X": 70822.62538353003,
+              "Y": 15829.999999998283
+            },
+            "Max": {
+              "X": 71752.62538353003,
+              "Y": 16759.999999998283
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.PumpFoundationObject, LZ.ViewPlanCreate",
+          "Bounds": {
+            "Min": {
+              "X": 70822.62538353003,
+              "Y": 14480.000000001251
+            },
+            "Max": {
+              "X": 71752.62538353003,
+              "Y": 15410.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.PlanMultilineTextObject, LZ.ViewPlanCreate",
+          "Text": "设备基础",
+          "InsertionPoint": {
+            "X": 71287.62538353003,
+            "Y": 14945.000000001251
+          },
+          "ApplyOcclusion": false,
+          "Bounds": {
+            "Min": {
+              "X": 70822.62538353003,
+              "Y": 14480.000000001251
+            },
+            "Max": {
+              "X": 71752.62538353003,
+              "Y": 15410.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.SumpPitObject, LZ.ViewPlanCreate",
+          "ElevationMm": 165259.0,
+          "ApplyOcclusion": true,
+          "Bounds": {
+            "Min": {
+              "X": 68462.625383530059,
+              "Y": 12580.000000001251
+            },
+            "Max": {
+              "X": 69462.625383530059,
+              "Y": 13580.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.PlanMultilineTextObject, LZ.ViewPlanCreate",
+          "Text": "集水坑",
+          "InsertionPoint": {
+            "X": 68962.625383530059,
+            "Y": 13080.000000001251
+          },
+          "ApplyOcclusion": true,
+          "Bounds": {
+            "Min": {
+              "X": 68462.625383530059,
+              "Y": 12580.000000001251
+            },
+            "Max": {
+              "X": 69462.625383530059,
+              "Y": 13580.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.DrainageTrenchObject, LZ.ViewPlanCreate",
+          "BoundaryLines": [
+            {
+              "Start": {
+                "X": 69362.625383530059,
+                "Y": 13580.000000001251
+              },
+              "End": {
+                "X": 69462.625383530059,
+                "Y": 13580.000000001251
+              }
+            },
+            {
+              "Start": {
+                "X": 69462.625383530059,
+                "Y": 14380.000000001251
+              },
+              "End": {
+                "X": 71852.62538353003,
+                "Y": 14380.000000001251
+              }
+            },
+            {
+              "Start": {
+                "X": 69362.625383530059,
+                "Y": 14480.000000001251
+              },
+              "End": {
+                "X": 70722.62538353003,
+                "Y": 14480.000000001251
+              }
+            },
+            {
+              "Start": {
+                "X": 70822.62538353003,
+                "Y": 14480.000000001251
+              },
+              "End": {
+                "X": 71752.62538353003,
+                "Y": 14480.000000001251
+              }
+            },
+            {
+              "Start": {
+                "X": 70822.62538353003,
+                "Y": 15410.000000001251
+              },
+              "End": {
+                "X": 71752.62538353003,
+                "Y": 15410.000000001251
+              }
+            },
+            {
+              "Start": {
+                "X": 70822.62538353003,
+                "Y": 15510.000000001251
+              },
+              "End": {
+                "X": 71852.62538353003,
+                "Y": 15510.000000001251
+              }
+            },
+            {
+              "Start": {
+                "X": 70822.62538353003,
+                "Y": 15729.999999998283
+              },
+              "End": {
+                "X": 71852.62538353003,
+                "Y": 15729.999999998283
+              }
+            },
+            {
+              "Start": {
+                "X": 70822.62538353003,
+                "Y": 15829.999999998283
+              },
+              "End": {
+                "X": 71752.62538353003,
+                "Y": 15829.999999998283
+              }
+            },
+            {
+              "Start": {
+                "X": 70822.62538353003,
+                "Y": 16759.999999998283
+              },
+              "End": {
+                "X": 71752.62538353003,
+                "Y": 16759.999999998283
+              }
+            },
+            {
+              "Start": {
+                "X": 70722.62538353003,
+                "Y": 16859.999999998283
+              },
+              "End": {
+                "X": 70812.625383530059,
+                "Y": 16859.999999998283
+              }
+            },
+            {
+              "Start": {
+                "X": 70912.625383530059,
+                "Y": 16859.999999998283
+              },
+              "End": {
+                "X": 71852.62538353003,
+                "Y": 16859.999999998283
+              }
+            },
+            {
+              "Start": {
+                "X": 70912.625383530059,
+                "Y": 17120.000000002125
+              },
+              "End": {
+                "X": 72012.625383530059,
+                "Y": 17120.000000002125
+              }
+            },
+            {
+              "Start": {
+                "X": 70912.625383530059,
+                "Y": 17220.000000002125
+              },
+              "End": {
+                "X": 71912.625383530059,
+                "Y": 17220.000000002125
+              }
+            },
+            {
+              "Start": {
+                "X": 70912.625383530059,
+                "Y": 18220.000000002125
+              },
+              "End": {
+                "X": 71912.625383530059,
+                "Y": 18220.000000002125
+              }
+            },
+            {
+              "Start": {
+                "X": 70912.625383530059,
+                "Y": 18320.000000002125
+              },
+              "End": {
+                "X": 72012.625383530059,
+                "Y": 18320.000000002125
+              }
+            },
+            {
+              "Start": {
+                "X": 70912.625383530059,
+                "Y": 18620.000000000524
+              },
+              "End": {
+                "X": 72012.625383530059,
+                "Y": 18620.000000000524
+              }
+            },
+            {
+              "Start": {
+                "X": 70912.625383530059,
+                "Y": 18720.000000000524
+              },
+              "End": {
+                "X": 71912.625383530059,
+                "Y": 18720.000000000524
+              }
+            },
+            {
+              "Start": {
+                "X": 70912.625383530059,
+                "Y": 19720.000000000524
+              },
+              "End": {
+                "X": 71912.625383530059,
+                "Y": 19720.000000000524
+              }
+            },
+            {
+              "Start": {
+                "X": 70812.625383530059,
+                "Y": 19820.000000000524
+              },
+              "End": {
+                "X": 72012.625383530059,
+                "Y": 19820.000000000524
+              }
+            },
+            {
+              "Start": {
+                "X": 69362.625383530059,
+                "Y": 13580.000000001251
+              },
+              "End": {
+                "X": 69362.625383530059,
+                "Y": 14480.000000001251
+              }
+            },
+            {
+              "Start": {
+                "X": 69462.625383530059,
+                "Y": 13580.000000001251
+              },
+              "End": {
+                "X": 69462.625383530059,
+                "Y": 14380.000000001251
+              }
+            },
+            {
+              "Start": {
+                "X": 70722.62538353003,
+                "Y": 14480.000000001251
+              },
+              "End": {
+                "X": 70722.62538353003,
+                "Y": 16859.999999998283
+              }
+            },
+            {
+              "Start": {
+                "X": 70812.625383530059,
+                "Y": 16859.999999998283
+              },
+              "End": {
+                "X": 70812.625383530059,
+                "Y": 19820.000000000524
+              }
+            },
+            {
+              "Start": {
+                "X": 70822.62538353003,
+                "Y": 14480.000000001251
+              },
+              "End": {
+                "X": 70822.62538353003,
+                "Y": 15410.000000001251
+              }
+            },
+            {
+              "Start": {
+                "X": 70822.62538353003,
+                "Y": 15510.000000001251
+              },
+              "End": {
+                "X": 70822.62538353003,
+                "Y": 15729.999999998283
+              }
+            },
+            {
+              "Start": {
+                "X": 70822.62538353003,
+                "Y": 15829.999999998283
+              },
+              "End": {
+                "X": 70822.62538353003,
+                "Y": 16759.999999998283
+              }
+            },
+            {
+              "Start": {
+                "X": 70912.625383530059,
+                "Y": 16859.999999998283
+              },
+              "End": {
+                "X": 70912.625383530059,
+                "Y": 17120.000000002125
+              }
+            },
+            {
+              "Start": {
+                "X": 70912.625383530059,
+                "Y": 17220.000000002125
+              },
+              "End": {
+                "X": 70912.625383530059,
+                "Y": 18220.000000002125
+              }
+            },
+            {
+              "Start": {
+                "X": 70912.625383530059,
+                "Y": 18320.000000002125
+              },
+              "End": {
+                "X": 70912.625383530059,
+                "Y": 18620.000000000524
+              }
+            },
+            {
+              "Start": {
+                "X": 70912.625383530059,
+                "Y": 18720.000000000524
+              },
+              "End": {
+                "X": 70912.625383530059,
+                "Y": 19720.000000000524
+              }
+            },
+            {
+              "Start": {
+                "X": 71752.62538353003,
+                "Y": 14480.000000001251
+              },
+              "End": {
+                "X": 71752.62538353003,
+                "Y": 15410.000000001251
+              }
+            },
+            {
+              "Start": {
+                "X": 71752.62538353003,
+                "Y": 15829.999999998283
+              },
+              "End": {
+                "X": 71752.62538353003,
+                "Y": 16759.999999998283
+              }
+            },
+            {
+              "Start": {
+                "X": 71852.62538353003,
+                "Y": 14380.000000001251
+              },
+              "End": {
+                "X": 71852.62538353003,
+                "Y": 15510.000000001251
+              }
+            },
+            {
+              "Start": {
+                "X": 71852.62538353003,
+                "Y": 15729.999999998283
+              },
+              "End": {
+                "X": 71852.62538353003,
+                "Y": 16859.999999998283
+              }
+            },
+            {
+              "Start": {
+                "X": 71912.625383530059,
+                "Y": 17220.000000002125
+              },
+              "End": {
+                "X": 71912.625383530059,
+                "Y": 18220.000000002125
+              }
+            },
+            {
+              "Start": {
+                "X": 71912.625383530059,
+                "Y": 18720.000000000524
+              },
+              "End": {
+                "X": 71912.625383530059,
+                "Y": 19720.000000000524
+              }
+            },
+            {
+              "Start": {
+                "X": 72012.625383530059,
+                "Y": 17120.000000002125
+              },
+              "End": {
+                "X": 72012.625383530059,
+                "Y": 18320.000000002125
+              }
+            },
+            {
+              "Start": {
+                "X": 72012.625383530059,
+                "Y": 18620.000000000524
+              },
+              "End": {
+                "X": 72012.625383530059,
+                "Y": 19820.000000000524
+              }
+            }
+          ],
+          "ApplyOcclusion": true,
+          "Bounds": {
+            "Min": {
+              "X": 69362.625383530059,
+              "Y": 13580.000000001251
+            },
+            "Max": {
+              "X": 72012.625383530059,
+              "Y": 19820.000000000524
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.AxisObject, LZ.ViewPlanCreate",
+          "LocationLine": {
+            "Start": {
+              "X": 68062.625383530059,
+              "Y": 7380.0000000012515
+            },
+            "End": {
+              "X": 75262.625383530059,
+              "Y": 7380.0000000012515
+            }
+          },
+          "Number": "A",
+          "Bounds": {
+            "Min": {
+              "X": 62262.625383530059,
+              "Y": 6980.0000000012515
+            },
+            "Max": {
+              "X": 81062.625383530059,
+              "Y": 7780.0000000012515
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.AxisObject, LZ.ViewPlanCreate",
+          "LocationLine": {
+            "Start": {
+              "X": 75162.625383530059,
+              "Y": 7280.0000000012515
+            },
+            "End": {
+              "X": 75162.625383530059,
+              "Y": 22380.000000001251
+            }
+          },
+          "Number": "2",
+          "Bounds": {
+            "Min": {
+              "X": 74762.625383530059,
+              "Y": 1480.0000000012515
+            },
+            "Max": {
+              "X": 75562.625383530059,
+              "Y": 28180.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.AxisObject, LZ.ViewPlanCreate",
+          "LocationLine": {
+            "Start": {
+              "X": 75262.625383530059,
+              "Y": 22280.000000001251
+            },
+            "End": {
+              "X": 68062.625383530059,
+              "Y": 22280.000000001251
+            }
+          },
+          "Number": "D",
+          "Bounds": {
+            "Min": {
+              "X": 62262.625383530059,
+              "Y": 21880.000000001251
+            },
+            "Max": {
+              "X": 81062.625383530059,
+              "Y": 22680.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.AxisObject, LZ.ViewPlanCreate",
+          "LocationLine": {
+            "Start": {
+              "X": 68162.625383530059,
+              "Y": 22380.000000001251
+            },
+            "End": {
+              "X": 68162.625383530059,
+              "Y": 7280.0000000012515
+            }
+          },
+          "Number": "1",
+          "Bounds": {
+            "Min": {
+              "X": 67762.625383530059,
+              "Y": 1480.0000000012515
+            },
+            "Max": {
+              "X": 68562.625383530059,
+              "Y": 28180.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.AxisObject, LZ.ViewPlanCreate",
+          "LocationLine": {
+            "Start": {
+              "X": 68062.625383530059,
+              "Y": 12180.000000001251
+            },
+            "End": {
+              "X": 75262.625383530059,
+              "Y": 12180.000000001251
+            }
+          },
+          "Number": "B",
+          "Bounds": {
+            "Min": {
+              "X": 62262.625383530059,
+              "Y": 11780.000000001251
+            },
+            "Max": {
+              "X": 81062.625383530059,
+              "Y": 12580.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.AxisObject, LZ.ViewPlanCreate",
+          "LocationLine": {
+            "Start": {
+              "X": 68062.625383530059,
+              "Y": 17280.000000001251
+            },
+            "End": {
+              "X": 75262.625383530059,
+              "Y": 17280.000000001251
+            }
+          },
+          "Number": "C",
+          "Bounds": {
+            "Min": {
+              "X": 62262.625383530059,
+              "Y": 16880.000000001251
+            },
+            "Max": {
+              "X": 81062.625383530059,
+              "Y": 17680.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.WallObject, LZ.ViewPlanCreate",
+          "Kind": 0,
+          "GenerateHatch": false,
+          "Outline": [
+            {
+              "X": 68262.625383530059,
+              "Y": 22380.000000001251
+            },
+            {
+              "X": 68262.625383530059,
+              "Y": 7280.0000000012515
+            },
+            {
+              "X": 68062.625383530059,
+              "Y": 7280.0000000012515
+            },
+            {
+              "X": 68062.625383530059,
+              "Y": 22380.000000001251
+            }
+          ],
+          "Bounds": {
+            "Min": {
+              "X": 68062.625383530059,
+              "Y": 7280.0000000012515
+            },
+            "Max": {
+              "X": 68262.625383530059,
+              "Y": 22380.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.WallObject, LZ.ViewPlanCreate",
+          "Kind": 0,
+          "GenerateHatch": false,
+          "Outline": [
+            {
+              "X": 75062.625383530059,
+              "Y": 7280.0000000012515
+            },
+            {
+              "X": 75062.625383530059,
+              "Y": 22380.000000001251
+            },
+            {
+              "X": 75262.625383530059,
+              "Y": 22380.000000001251
+            },
+            {
+              "X": 75262.625383530059,
+              "Y": 7280.0000000012515
+            }
+          ],
+          "Bounds": {
+            "Min": {
+              "X": 75062.625383530059,
+              "Y": 7280.0000000012515
+            },
+            "Max": {
+              "X": 75262.625383530059,
+              "Y": 22380.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.WallObject, LZ.ViewPlanCreate",
+          "Kind": 0,
+          "GenerateHatch": false,
+          "Outline": [
+            {
+              "X": 68062.625383530059,
+              "Y": 7480.0000000012515
+            },
+            {
+              "X": 75262.625383530059,
+              "Y": 7480.0000000012515
+            },
+            {
+              "X": 75262.625383530059,
+              "Y": 7280.0000000012515
+            },
+            {
+              "X": 68062.625383530059,
+              "Y": 7280.0000000012515
+            }
+          ],
+          "Bounds": {
+            "Min": {
+              "X": 68062.625383530059,
+              "Y": 7280.0000000012515
+            },
+            "Max": {
+              "X": 75262.625383530059,
+              "Y": 7480.0000000012515
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.WallObject, LZ.ViewPlanCreate",
+          "Kind": 0,
+          "GenerateHatch": false,
+          "Outline": [
+            {
+              "X": 75262.625383530059,
+              "Y": 22180.000000001251
+            },
+            {
+              "X": 68062.625383530059,
+              "Y": 22180.000000001251
+            },
+            {
+              "X": 68062.625383530059,
+              "Y": 22380.000000001251
+            },
+            {
+              "X": 75262.625383530059,
+              "Y": 22380.000000001251
+            }
+          ],
+          "Bounds": {
+            "Min": {
+              "X": 68062.625383530059,
+              "Y": 22180.000000001251
+            },
+            "Max": {
+              "X": 75262.625383530059,
+              "Y": 22380.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.WallObject, LZ.ViewPlanCreate",
+          "Kind": 1,
+          "GenerateHatch": false,
+          "Outline": [
+            {
+              "X": 68062.625383530059,
+              "Y": 12280.000000001251
+            },
+            {
+              "X": 75262.625383530059,
+              "Y": 12280.000000001251
+            },
+            {
+              "X": 75262.625383530059,
+              "Y": 12080.000000001251
+            },
+            {
+              "X": 68062.625383530059,
+              "Y": 12080.000000001251
+            }
+          ],
+          "Bounds": {
+            "Min": {
+              "X": 68062.625383530059,
+              "Y": 12080.000000001251
+            },
+            "Max": {
+              "X": 75262.625383530059,
+              "Y": 12280.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.WallObject, LZ.ViewPlanCreate",
+          "Kind": 1,
+          "GenerateHatch": false,
+          "Outline": [
+            {
+              "X": 71362.625383530059,
+              "Y": 12180.000000001251
+            },
+            {
+              "X": 71362.625383530059,
+              "Y": 7280.0000000012515
+            },
+            {
+              "X": 71162.625383530059,
+              "Y": 7280.0000000012515
+            },
+            {
+              "X": 71162.625383530059,
+              "Y": 12180.000000001251
+            }
+          ],
+          "Bounds": {
+            "Min": {
+              "X": 71162.625383530059,
+              "Y": 7280.0000000012515
+            },
+            "Max": {
+              "X": 71362.625383530059,
+              "Y": 12180.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.RoomOutlineObject, LZ.ViewPlanCreate",
+          "RoomName": "控制间",
+          "Outline": [
+            {
+              "X": 68262.625383530059,
+              "Y": 7480.0000000012515
+            },
+            {
+              "X": 68262.625383530059,
+              "Y": 12080.000000001251
+            },
+            {
+              "X": 71162.625383530059,
+              "Y": 12080.000000001251
+            },
+            {
+              "X": 71162.625383530059,
+              "Y": 7480.0000000012515
+            }
+          ],
+          "Bounds": {
+            "Min": {
+              "X": 68262.625383530059,
+              "Y": 7480.0000000012515
+            },
+            "Max": {
+              "X": 71162.625383530059,
+              "Y": 12080.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.RoomOutlineObject, LZ.ViewPlanCreate",
+          "RoomName": "水泵间",
+          "Outline": [
+            {
+              "X": 68262.625383530059,
+              "Y": 12280.000000001251
+            },
+            {
+              "X": 68262.625383530059,
+              "Y": 22180.000000001251
+            },
+            {
+              "X": 75062.625383530059,
+              "Y": 22180.000000001251
+            },
+            {
+              "X": 75062.625383530059,
+              "Y": 12280.000000001251
+            }
+          ],
+          "Bounds": {
+            "Min": {
+              "X": 68262.625383530059,
+              "Y": 12280.000000001251
+            },
+            "Max": {
+              "X": 75062.625383530059,
+              "Y": 22180.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.RoomOutlineObject, LZ.ViewPlanCreate",
+          "RoomName": "配电间",
+          "Outline": [
+            {
+              "X": 71362.625383530059,
+              "Y": 7480.0000000012515
+            },
+            {
+              "X": 71362.625383530059,
+              "Y": 12080.000000001251
+            },
+            {
+              "X": 75062.625383530059,
+              "Y": 12080.000000001251
+            },
+            {
+              "X": 75062.625383530059,
+              "Y": 7480.0000000012515
+            }
+          ],
+          "Bounds": {
+            "Min": {
+              "X": 71362.625383530059,
+              "Y": 7480.0000000012515
+            },
+            "Max": {
+              "X": 75062.625383530059,
+              "Y": 12080.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.MaintenancePlatformPartitionObject, LZ.ViewPlanCreate",
+          "Name": "检修平台分隔",
+          "LocationLine": {
+            "Start": {
+              "X": 73362.625383530059,
+              "Y": 12280.000000001251
+            },
+            "End": {
+              "X": 73362.625383530059,
+              "Y": 22180.000000001251
+            }
+          },
+          "Bounds": {
+            "Min": {
+              "X": 73362.625383530059,
+              "Y": 12280.000000001251
+            },
+            "Max": {
+              "X": 73362.625383530059,
+              "Y": 22180.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.MaintenancePlatformObject, LZ.ViewPlanCreate",
+          "Bounds": {
+            "Min": {
+              "X": 73362.625383530059,
+              "Y": 12280.000000001251
+            },
+            "Max": {
+              "X": 75062.625383530059,
+              "Y": 22180.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.PlanMultilineTextObject, LZ.ViewPlanCreate",
+          "Text": "检修平台",
+          "InsertionPoint": {
+            "X": 74212.625383530059,
+            "Y": 16330.000000001251
+          },
+          "ApplyOcclusion": false,
+          "Bounds": {
+            "Min": {
+              "X": 73362.625383530059,
+              "Y": 12280.000000001251
+            },
+            "Max": {
+              "X": 75062.625383530059,
+              "Y": 22180.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.PlanElevationAnnotationObject, LZ.ViewPlanCreate",
+          "Kind": 2,
+          "InsertionPoint": {
+            "X": 74212.625383530059,
+            "Y": 15330.000000001251
+          },
+          "ElevationMm": 169200.0,
+          "TextSuffix": "",
+          "Bounds": {
+            "Min": {
+              "X": 74212.625383530059,
+              "Y": 15330.000000001251
+            },
+            "Max": {
+              "X": 74212.625383530059,
+              "Y": 15330.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.SteelLadderObject, LZ.ViewPlanCreate",
+          "InsertionPoint": {
+            "X": 73362.625383530059,
+            "Y": 22180.000000001251
+          },
+          "FacingNormal": {
+            "X": 0.0,
+            "Y": -1.0
+          },
+          "Bounds": {
+            "Min": {
+              "X": 73362.625383530059,
+              "Y": 22180.000000001251
+            },
+            "Max": {
+              "X": 73362.625383530059,
+              "Y": 22180.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.PlanMultilineTextObject, LZ.ViewPlanCreate",
+          "Text": "控制室",
+          "InsertionPoint": {
+            "X": 69712.625383530059,
+            "Y": 9780.0000000012515
+          },
+          "ApplyOcclusion": false,
+          "Bounds": {
+            "Min": {
+              "X": 68262.625383530059,
+              "Y": 7480.0000000012515
+            },
+            "Max": {
+              "X": 71162.625383530059,
+              "Y": 12080.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.PlanElevationAnnotationObject, LZ.ViewPlanCreate",
+          "Kind": 1,
+          "InsertionPoint": {
+            "X": 69712.625383530059,
+            "Y": 8780.0000000012515
+          },
+          "ElevationMm": 169200.0,
+          "TextSuffix": "",
+          "Bounds": {
+            "Min": {
+              "X": 69712.625383530059,
+              "Y": 8780.0000000012515
+            },
+            "Max": {
+              "X": 69712.625383530059,
+              "Y": 8780.0000000012515
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.PlanMultilineTextObject, LZ.ViewPlanCreate",
+          "Text": "配电间",
+          "InsertionPoint": {
+            "X": 73212.625383530059,
+            "Y": 9780.0000000012515
+          },
+          "ApplyOcclusion": false,
+          "Bounds": {
+            "Min": {
+              "X": 71362.625383530059,
+              "Y": 7480.0000000012515
+            },
+            "Max": {
+              "X": 75062.625383530059,
+              "Y": 12080.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.PlanElevationAnnotationObject, LZ.ViewPlanCreate",
+          "Kind": 1,
+          "InsertionPoint": {
+            "X": 73212.625383530059,
+            "Y": 8780.0000000012515
+          },
+          "ElevationMm": 169200.0,
+          "TextSuffix": "",
+          "Bounds": {
+            "Min": {
+              "X": 73212.625383530059,
+              "Y": 8780.0000000012515
+            },
+            "Max": {
+              "X": 73212.625383530059,
+              "Y": 8780.0000000012515
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.PlanMultilineTextObject, LZ.ViewPlanCreate",
+          "Text": "水泵间",
+          "InsertionPoint": {
+            "X": 71662.625383530059,
+            "Y": 21380.000000001251
+          },
+          "ApplyOcclusion": false,
+          "Bounds": {
+            "Min": {
+              "X": 68262.625383530059,
+              "Y": 12280.000000001251
+            },
+            "Max": {
+              "X": 75062.625383530059,
+              "Y": 22180.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.PlanElevationAnnotationObject, LZ.ViewPlanCreate",
+          "Kind": 0,
+          "InsertionPoint": {
+            "X": 71662.625383530059,
+            "Y": 20380.000000001251
+          },
+          "ElevationMm": 166759.0,
+          "TextSuffix": "（结构）",
+          "Bounds": {
+            "Min": {
+              "X": 71662.625383530059,
+              "Y": 20380.000000001251
+            },
+            "Max": {
+              "X": 71662.625383530059,
+              "Y": 20380.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.StructuralColumnObject, LZ.ViewPlanCreate",
+          "InsertionPoint": {
+            "X": 68262.625383530059,
+            "Y": 7480.0000000012515
+          },
+          "Length": 400.0,
+          "Width": 400.0,
+          "Bounds": {
+            "Min": {
+              "X": 68062.625383530059,
+              "Y": 7280.0000000012515
+            },
+            "Max": {
+              "X": 68462.625383530059,
+              "Y": 7680.0000000012515
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.StructuralColumnObject, LZ.ViewPlanCreate",
+          "InsertionPoint": {
+            "X": 68262.625383530059,
+            "Y": 12180.000000001251
+          },
+          "Length": 400.0,
+          "Width": 400.0,
+          "Bounds": {
+            "Min": {
+              "X": 68062.625383530059,
+              "Y": 11980.000000001251
+            },
+            "Max": {
+              "X": 68462.625383530059,
+              "Y": 12380.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.StructuralColumnObject, LZ.ViewPlanCreate",
+          "InsertionPoint": {
+            "X": 68262.625383530059,
+            "Y": 17280.000000001251
+          },
+          "Length": 400.0,
+          "Width": 400.0,
+          "Bounds": {
+            "Min": {
+              "X": 68062.625383530059,
+              "Y": 17080.000000001251
+            },
+            "Max": {
+              "X": 68462.625383530059,
+              "Y": 17480.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.StructuralColumnObject, LZ.ViewPlanCreate",
+          "InsertionPoint": {
+            "X": 68262.625383530059,
+            "Y": 22180.000000001251
+          },
+          "Length": 400.0,
+          "Width": 400.0,
+          "Bounds": {
+            "Min": {
+              "X": 68062.625383530059,
+              "Y": 21980.000000001251
+            },
+            "Max": {
+              "X": 68462.625383530059,
+              "Y": 22380.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.StructuralColumnObject, LZ.ViewPlanCreate",
+          "InsertionPoint": {
+            "X": 75062.625383530059,
+            "Y": 7480.0000000012515
+          },
+          "Length": 400.0,
+          "Width": 400.0,
+          "Bounds": {
+            "Min": {
+              "X": 74862.625383530059,
+              "Y": 7280.0000000012515
+            },
+            "Max": {
+              "X": 75262.625383530059,
+              "Y": 7680.0000000012515
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.StructuralColumnObject, LZ.ViewPlanCreate",
+          "InsertionPoint": {
+            "X": 75062.625383530059,
+            "Y": 12180.000000001251
+          },
+          "Length": 400.0,
+          "Width": 400.0,
+          "Bounds": {
+            "Min": {
+              "X": 74862.625383530059,
+              "Y": 11980.000000001251
+            },
+            "Max": {
+              "X": 75262.625383530059,
+              "Y": 12380.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.StructuralColumnObject, LZ.ViewPlanCreate",
+          "InsertionPoint": {
+            "X": 75062.625383530059,
+            "Y": 17280.000000001251
+          },
+          "Length": 400.0,
+          "Width": 400.0,
+          "Bounds": {
+            "Min": {
+              "X": 74862.625383530059,
+              "Y": 17080.000000001251
+            },
+            "Max": {
+              "X": 75262.625383530059,
+              "Y": 17480.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.StructuralColumnObject, LZ.ViewPlanCreate",
+          "InsertionPoint": {
+            "X": 75062.625383530059,
+            "Y": 22180.000000001251
+          },
+          "Length": 400.0,
+          "Width": 400.0,
+          "Bounds": {
+            "Min": {
+              "X": 74862.625383530059,
+              "Y": 21980.000000001251
+            },
+            "Max": {
+              "X": 75262.625383530059,
+              "Y": 22380.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.DoorObject, LZ.ViewPlanCreate",
+          "BlockName": "平面_双开门_宽度1800",
+          "Number": "M1824",
+          "Kind": 0,
+          "IsExterior": true,
+          "Width": 1800.0,
+          "Height": 2400.0,
+          "InsertionPoint": {
+            "X": 75162.625383530059,
+            "Y": 20980.000000001251
+          },
+          "OpeningMidpoint": {
+            "X": 75162.625383530059,
+            "Y": 20980.000000001251
+          },
+          "FacingNormal": {
+            "X": 1.0,
+            "Y": 0.0
+          },
+          "Bounds": {
+            "Min": {
+              "X": 75062.625383530059,
+              "Y": 20080.000000001251
+            },
+            "Max": {
+              "X": 76062.625383530059,
+              "Y": 21880.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.DoorObject, LZ.ViewPlanCreate",
+          "BlockName": "平面_双开门_宽度1800",
+          "Number": "FM甲1824",
+          "Kind": 0,
+          "IsExterior": true,
+          "Width": 1800.0,
+          "Height": 2400.0,
+          "InsertionPoint": {
+            "X": 75162.625383530059,
+            "Y": 8680.0000000012515
+          },
+          "OpeningMidpoint": {
+            "X": 75162.625383530059,
+            "Y": 8680.0000000012515
+          },
+          "FacingNormal": {
+            "X": 1.0,
+            "Y": 0.0
+          },
+          "Bounds": {
+            "Min": {
+              "X": 75062.625383530059,
+              "Y": 7780.0000000012515
+            },
+            "Max": {
+              "X": 76062.625383530059,
+              "Y": 9580.0000000012515
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.DoorObject, LZ.ViewPlanCreate",
+          "BlockName": "平面_单开门_宽度1000",
+          "Number": "M1024",
+          "Kind": 1,
+          "IsExterior": true,
+          "Width": 1000.0,
+          "Height": 2400.0,
+          "InsertionPoint": {
+            "X": 68562.625383530059,
+            "Y": 7380.0000000012515
+          },
+          "OpeningMidpoint": {
+            "X": 69062.625383530059,
+            "Y": 7380.0000000012515
+          },
+          "FacingNormal": {
+            "X": 0.0,
+            "Y": -1.0
+          },
+          "Bounds": {
+            "Min": {
+              "X": 68562.625383530059,
+              "Y": 6380.0000000012515
+            },
+            "Max": {
+              "X": 69562.625383530059,
+              "Y": 7480.0000000012515
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.DoorObject, LZ.ViewPlanCreate",
+          "BlockName": "平面_单开门_宽度1000",
+          "Number": "FM甲1024",
+          "Kind": 1,
+          "IsExterior": false,
+          "Width": 1000.0,
+          "Height": 2400.0,
+          "InsertionPoint": {
+            "X": 74762.625383530059,
+            "Y": 12180.000000001251
+          },
+          "OpeningMidpoint": {
+            "X": 74262.625383530059,
+            "Y": 12180.000000001251
+          },
+          "FacingNormal": {
+            "X": 0.0,
+            "Y": 1.0
+          },
+          "Bounds": {
+            "Min": {
+              "X": 73762.625383530059,
+              "Y": 12080.000000001251
+            },
+            "Max": {
+              "X": 74762.625383530059,
+              "Y": 13180.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.DoorObject, LZ.ViewPlanCreate",
+          "BlockName": "平面_双向单开门_宽度1000",
+          "Number": "FM甲1024",
+          "Kind": 2,
+          "IsExterior": false,
+          "Width": 1000.0,
+          "Height": 2400.0,
+          "InsertionPoint": {
+            "X": 71262.625383530059,
+            "Y": 7380.0000000012515
+          },
+          "OpeningMidpoint": {
+            "X": 71262.625383530059,
+            "Y": 7867.5000000012515
+          },
+          "FacingNormal": {
+            "X": 1.0,
+            "Y": 0.0
+          },
+          "Bounds": {
+            "Min": {
+              "X": 70287.625383530059,
+              "Y": 7380.0000000012515
+            },
+            "Max": {
+              "X": 72237.625383530059,
+              "Y": 8355.0000000012515
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.RampObject, LZ.ViewPlanCreate",
+          "InsertionPoint": {
+            "X": 75262.625383530059,
+            "Y": 19780.000000001251
+          },
+          "OutwardNormal": {
+            "X": 1.0,
+            "Y": 0.0
+          },
+          "Length": 1600.0,
+          "Width": 2400.0,
+          "Bounds": {
+            "Min": {
+              "X": 75262.625383530059,
+              "Y": 19780.000000001251
+            },
+            "Max": {
+              "X": 76862.625383530059,
+              "Y": 22180.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.RampObject, LZ.ViewPlanCreate",
+          "InsertionPoint": {
+            "X": 75262.625383530059,
+            "Y": 7480.0000000012515
+          },
+          "OutwardNormal": {
+            "X": 1.0,
+            "Y": 0.0
+          },
+          "Length": 1600.0,
+          "Width": 2400.0,
+          "Bounds": {
+            "Min": {
+              "X": 75262.625383530059,
+              "Y": 7480.0000000012515
+            },
+            "Max": {
+              "X": 76862.625383530059,
+              "Y": 9880.0000000012515
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.RampObject, LZ.ViewPlanCreate",
+          "InsertionPoint": {
+            "X": 68262.625383530059,
+            "Y": 7280.0000000012515
+          },
+          "OutwardNormal": {
+            "X": 0.0,
+            "Y": -1.0
+          },
+          "Length": 1600.0,
+          "Width": 1600.0,
+          "Bounds": {
+            "Min": {
+              "X": 68262.625383530059,
+              "Y": 5680.0000000012515
+            },
+            "Max": {
+              "X": 69862.625383530059,
+              "Y": 7280.0000000012515
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.ApronObject, LZ.ViewPlanCreate",
+          "InnerOutline": [
+            {
+              "X": 68062.625383530059,
+              "Y": 7280.0000000012515
+            },
+            {
+              "X": 75262.625383530059,
+              "Y": 7280.0000000012515
+            },
+            {
+              "X": 75262.625383530059,
+              "Y": 22380.000000001251
+            },
+            {
+              "X": 68062.625383530059,
+              "Y": 22380.000000001251
+            }
+          ],
+          "OuterOutline": [
+            {
+              "X": 67462.625383530059,
+              "Y": 6680.0000000012515
+            },
+            {
+              "X": 75862.625383530059,
+              "Y": 6680.0000000012515
+            },
+            {
+              "X": 75862.625383530059,
+              "Y": 22980.000000001251
+            },
+            {
+              "X": 67462.625383530059,
+              "Y": 22980.000000001251
+            }
+          ],
+          "Bounds": {
+            "Min": {
+              "X": 67462.625383530059,
+              "Y": 6680.0000000012515
+            },
+            "Max": {
+              "X": 75862.625383530059,
+              "Y": 22980.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.WindowObject, LZ.ViewPlanCreate",
+          "BlockName": "平面_窗",
+          "Number": "XC1518",
+          "Kind": 0,
+          "Width": 1500.0,
+          "Height": 1800.0,
+          "InsertionPoint": {
+            "X": 68162.625383530059,
+            "Y": 9030.0000000012515
+          },
+          "WallDirection": {
+            "X": 0.0,
+            "Y": 1.0
+          },
+          "Bounds": {
+            "Min": {
+              "X": 68062.625383530059,
+              "Y": 9030.0000000012515
+            },
+            "Max": {
+              "X": 68262.625383530059,
+              "Y": 10530.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.WindowObject, LZ.ViewPlanCreate",
+          "BlockName": "平面_窗",
+          "Number": "C1518",
+          "Kind": 0,
+          "Width": 1500.0,
+          "Height": 1800.0,
+          "InsertionPoint": {
+            "X": 68162.625383530059,
+            "Y": 13980.000000001251
+          },
+          "WallDirection": {
+            "X": 0.0,
+            "Y": 1.0
+          },
+          "Bounds": {
+            "Min": {
+              "X": 68062.625383530059,
+              "Y": 13980.000000001251
+            },
+            "Max": {
+              "X": 68262.625383530059,
+              "Y": 15480.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.WindowObject, LZ.ViewPlanCreate",
+          "BlockName": "平面_窗",
+          "Number": "C1518",
+          "Kind": 0,
+          "Width": 1500.0,
+          "Height": 1800.0,
+          "InsertionPoint": {
+            "X": 68162.625383530059,
+            "Y": 19030.000000001251
+          },
+          "WallDirection": {
+            "X": 0.0,
+            "Y": 1.0
+          },
+          "Bounds": {
+            "Min": {
+              "X": 68062.625383530059,
+              "Y": 19030.000000001251
+            },
+            "Max": {
+              "X": 68262.625383530059,
+              "Y": 20530.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.WindowObject, LZ.ViewPlanCreate",
+          "BlockName": "平面_窗",
+          "Number": "C1518",
+          "Kind": 0,
+          "Width": 1500.0,
+          "Height": 1800.0,
+          "InsertionPoint": {
+            "X": 75162.625383530059,
+            "Y": 13980.000000001251
+          },
+          "WallDirection": {
+            "X": 0.0,
+            "Y": 1.0
+          },
+          "Bounds": {
+            "Min": {
+              "X": 75062.625383530059,
+              "Y": 13980.000000001251
+            },
+            "Max": {
+              "X": 75262.625383530059,
+              "Y": 15480.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.WindowObject, LZ.ViewPlanCreate",
+          "BlockName": "平面_窗",
+          "Number": "C1518",
+          "Kind": 0,
+          "Width": 1500.0,
+          "Height": 1800.0,
+          "InsertionPoint": {
+            "X": 69162.625383530059,
+            "Y": 22280.000000001251
+          },
+          "WallDirection": {
+            "X": 1.0,
+            "Y": 0.0
+          },
+          "Bounds": {
+            "Min": {
+              "X": 69162.625383530059,
+              "Y": 22180.000000001251
+            },
+            "Max": {
+              "X": 70662.625383530059,
+              "Y": 22380.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.WindowObject, LZ.ViewPlanCreate",
+          "BlockName": "平面_窗",
+          "Number": "C1518",
+          "Kind": 0,
+          "Width": 1500.0,
+          "Height": 1800.0,
+          "InsertionPoint": {
+            "X": 72662.625383530059,
+            "Y": 22280.000000001251
+          },
+          "WallDirection": {
+            "X": 1.0,
+            "Y": 0.0
+          },
+          "Bounds": {
+            "Min": {
+              "X": 72662.625383530059,
+              "Y": 22180.000000001251
+            },
+            "Max": {
+              "X": 74162.625383530059,
+              "Y": 22380.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.WindowObject, LZ.ViewPlanCreate",
+          "BlockName": "平面_窗",
+          "Number": "FM甲1024",
+          "Kind": 1,
+          "Width": 1000.0,
+          "Height": 2400.0,
+          "InsertionPoint": {
+            "X": 69212.625383530059,
+            "Y": 12180.000000001251
+          },
+          "WallDirection": {
+            "X": 1.0,
+            "Y": 0.0
+          },
+          "Bounds": {
+            "Min": {
+              "X": 69212.625383530059,
+              "Y": 12080.000000001251
+            },
+            "Max": {
+              "X": 70212.625383530059,
+              "Y": 12280.000000001251
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.IntakeForebayObject, LZ.ViewPlanCreate",
+          "Length": 1000.0,
+          "Width": 5750.0,
+          "InsertionPoint": {
+            "X": 59962.625383530059,
+            "Y": 14244.999999998981
+          },
+          "Bounds": {
+            "Min": {
+              "X": 53962.625383530059,
+              "Y": 12394.999999998514
+            },
+            "Max": {
+              "X": 60449.903966503232,
+              "Y": 20495.000000731932
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.IntakeChannelSlopeObject, LZ.ViewPlanCreate",
+          "Side": 0,
+          "Width": 5000.0,
+          "InsertionPoint": {
+            "X": 58449.625383530059,
+            "Y": 14244.999999998981
+          },
+          "Bounds": {
+            "Min": {
+              "X": 53949.625383200837,
+              "Y": 8745.0000000734872
+            },
+            "Max": {
+              "X": 60241.390089103268,
+              "Y": 14245.000000035536
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.IntakeChannelSlopeObject, LZ.ViewPlanCreate",
+          "Side": 1,
+          "Width": 5000.0,
+          "InsertionPoint": {
+            "X": 58449.625383530059,
+            "Y": 19994.999999998981
+          },
+          "Bounds": {
+            "Min": {
+              "X": 53949.625383377323,
+              "Y": 19994.999999998981
+            },
+            "Max": {
+              "X": 60241.390089316075,
+              "Y": 25495.000000073487
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.BreakLineObject, LZ.ViewPlanCreate",
+          "HalfLength": 11100.0,
+          "InsertionPoint": {
+            "X": 53962.625383530059,
+            "Y": 17119.999999998981
+          },
+          "Bounds": {
+            "Min": {
+              "X": 53752.625383530059,
+              "Y": 6019.9999999987485
+            },
+            "Max": {
+              "X": 54172.625383530059,
+              "Y": 28219.999999998749
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.IntakeChannelFrontSectionObject, LZ.ViewPlanCreate",
+          "UpperSlopeWidth": 5500.0,
+          "LowerSlopeWidth": 5500.0,
+          "ChannelWidth": 5750.0,
+          "Length": 5000.0,
+          "InsertionPoint": {
+            "X": 53949.625383530059,
+            "Y": 14244.999999998981
+          },
+          "Bounds": {
+            "Min": {
+              "X": 44937.374616469941,
+              "Y": 8496.5384615363037
+            },
+            "Max": {
+              "X": 53949.625383531507,
+              "Y": 25743.461538459524
+            }
+          }
+        }
+      ]
+    },
+    {
+      "Source": null,
+      "ViewKind": 5,
+      "ViewTypeName": "屋面平面图",
+      "Bounds": {
+        "Min": {
+          "X": 84000.0,
+          "Y": 0.0
+        },
+        "Max": {
+          "X": 126000.0,
+          "Y": 29700.0
+        }
+      },
+      "LeftBottomPoint": {
+        "X": 84000.0,
+        "Y": 0.0
+      },
+      "Elements": [
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.PlanElevationAnnotationObject, LZ.ViewPlanCreate",
+          "Kind": 4,
+          "InsertionPoint": {
+            "X": 105600.0,
+            "Y": 16000.0
+          },
+          "ElevationMm": 173800.0,
+          "TextSuffix": "（结构）",
+          "Bounds": {
+            "Min": {
+              "X": 105600.0,
+              "Y": 16000.0
+            },
+            "Max": {
+              "X": 105600.0,
+              "Y": 16000.0
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.AxisObject, LZ.ViewPlanCreate",
+          "LocationLine": {
+            "Start": {
+              "X": 102000.0,
+              "Y": 7100.0
+            },
+            "End": {
+              "X": 109200.0,
+              "Y": 7100.0
+            }
+          },
+          "Number": "A",
+          "Bounds": {
+            "Min": {
+              "X": 96200.0,
+              "Y": 6700.0
+            },
+            "Max": {
+              "X": 115000.0,
+              "Y": 7500.0
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.AxisObject, LZ.ViewPlanCreate",
+          "LocationLine": {
+            "Start": {
+              "X": 109100.0,
+              "Y": 7000.0
+            },
+            "End": {
+              "X": 109100.0,
+              "Y": 22100.0
+            }
+          },
+          "Number": "2",
+          "Bounds": {
+            "Min": {
+              "X": 108700.0,
+              "Y": 1200.0
+            },
+            "Max": {
+              "X": 109500.0,
+              "Y": 27900.0
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.AxisObject, LZ.ViewPlanCreate",
+          "LocationLine": {
+            "Start": {
+              "X": 109200.0,
+              "Y": 22000.0
+            },
+            "End": {
+              "X": 102000.0,
+              "Y": 22000.0
+            }
+          },
+          "Number": "D",
+          "Bounds": {
+            "Min": {
+              "X": 96200.0,
+              "Y": 21600.0
+            },
+            "Max": {
+              "X": 115000.0,
+              "Y": 22400.0
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.AxisObject, LZ.ViewPlanCreate",
+          "LocationLine": {
+            "Start": {
+              "X": 102100.0,
+              "Y": 22100.0
+            },
+            "End": {
+              "X": 102100.0,
+              "Y": 7000.0
+            }
+          },
+          "Number": "1",
+          "Bounds": {
+            "Min": {
+              "X": 101700.0,
+              "Y": 1200.0
+            },
+            "Max": {
+              "X": 102500.0,
+              "Y": 27900.0
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.AxisObject, LZ.ViewPlanCreate",
+          "LocationLine": {
+            "Start": {
+              "X": 102000.0,
+              "Y": 11900.0
+            },
+            "End": {
+              "X": 109200.0,
+              "Y": 11900.0
+            }
+          },
+          "Number": "B",
+          "Bounds": {
+            "Min": {
+              "X": 96200.0,
+              "Y": 11500.0
+            },
+            "Max": {
+              "X": 115000.0,
+              "Y": 12300.0
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.AxisObject, LZ.ViewPlanCreate",
+          "LocationLine": {
+            "Start": {
+              "X": 102000.0,
+              "Y": 17000.0
+            },
+            "End": {
+              "X": 109200.0,
+              "Y": 17000.0
+            }
+          },
+          "Number": "C",
+          "Bounds": {
+            "Min": {
+              "X": 96200.0,
+              "Y": 16600.0
+            },
+            "Max": {
+              "X": 115000.0,
+              "Y": 17400.0
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.RoofPolylineObject, LZ.ViewPlanCreate",
+          "Kind": 0,
+          "Closed": true,
+          "Vertices": [
+            {
+              "X": 102000.0,
+              "Y": 7000.0
+            },
+            {
+              "X": 109200.0,
+              "Y": 7000.0
+            },
+            {
+              "X": 109200.0,
+              "Y": 22100.0
+            },
+            {
+              "X": 102000.0,
+              "Y": 22100.0
+            }
+          ],
+          "Bounds": {
+            "Min": {
+              "X": 102000.0,
+              "Y": 7000.0
+            },
+            "Max": {
+              "X": 109200.0,
+              "Y": 22100.0
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.RoofPolylineObject, LZ.ViewPlanCreate",
+          "Kind": 1,
+          "Closed": true,
+          "Vertices": [
+            {
+              "X": 101900.0,
+              "Y": 6900.0
+            },
+            {
+              "X": 109300.0,
+              "Y": 6900.0
+            },
+            {
+              "X": 109300.0,
+              "Y": 22200.0
+            },
+            {
+              "X": 101900.0,
+              "Y": 22200.0
+            }
+          ],
+          "Bounds": {
+            "Min": {
+              "X": 101900.0,
+              "Y": 6900.0
+            },
+            "Max": {
+              "X": 109300.0,
+              "Y": 22200.0
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.RoofPolylineObject, LZ.ViewPlanCreate",
+          "Kind": 2,
+          "Closed": true,
+          "Vertices": [
+            {
+              "X": 101800.0,
+              "Y": 6800.0
+            },
+            {
+              "X": 109400.0,
+              "Y": 6800.0
+            },
+            {
+              "X": 109400.0,
+              "Y": 22300.0
+            },
+            {
+              "X": 101800.0,
+              "Y": 22300.0
+            }
+          ],
+          "Bounds": {
+            "Min": {
+              "X": 101800.0,
+              "Y": 6800.0
+            },
+            "Max": {
+              "X": 109400.0,
+              "Y": 22300.0
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.RoofPolylineObject, LZ.ViewPlanCreate",
+          "Kind": 3,
+          "Closed": true,
+          "Vertices": [
+            {
+              "X": 101500.0,
+              "Y": 6500.0
+            },
+            {
+              "X": 109700.0,
+              "Y": 6500.0
+            },
+            {
+              "X": 109700.0,
+              "Y": 22600.0
+            },
+            {
+              "X": 101500.0,
+              "Y": 22600.0
+            }
+          ],
+          "Bounds": {
+            "Min": {
+              "X": 101500.0,
+              "Y": 6500.0
+            },
+            "Max": {
+              "X": 109700.0,
+              "Y": 22600.0
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.RoofPolylineObject, LZ.ViewPlanCreate",
+          "Kind": 4,
+          "Closed": false,
+          "Vertices": [
+            {
+              "X": 109700.0,
+              "Y": 19500.0
+            },
+            {
+              "X": 110400.0,
+              "Y": 19500.0
+            },
+            {
+              "X": 110400.0,
+              "Y": 21900.0
+            },
+            {
+              "X": 109700.0,
+              "Y": 21900.0
+            }
+          ],
+          "Bounds": {
+            "Min": {
+              "X": 109700.0,
+              "Y": 19500.0
+            },
+            "Max": {
+              "X": 110400.0,
+              "Y": 21900.0
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.RoofPolylineObject, LZ.ViewPlanCreate",
+          "Kind": 4,
+          "Closed": false,
+          "Vertices": [
+            {
+              "X": 109700.0,
+              "Y": 7200.0
+            },
+            {
+              "X": 110400.0,
+              "Y": 7200.0
+            },
+            {
+              "X": 110400.0,
+              "Y": 9600.0
+            },
+            {
+              "X": 109700.0,
+              "Y": 9600.0
+            }
+          ],
+          "Bounds": {
+            "Min": {
+              "X": 109700.0,
+              "Y": 7200.0
+            },
+            "Max": {
+              "X": 110400.0,
+              "Y": 9600.0
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.RoofPolylineObject, LZ.ViewPlanCreate",
+          "Kind": 4,
+          "Closed": false,
+          "Vertices": [
+            {
+              "X": 102200.0,
+              "Y": 6500.0
+            },
+            {
+              "X": 102200.0,
+              "Y": 5800.0
+            },
+            {
+              "X": 103800.0,
+              "Y": 5800.0
+            },
+            {
+              "X": 103800.0,
+              "Y": 6500.0
+            }
+          ],
+          "Bounds": {
+            "Min": {
+              "X": 102200.0,
+              "Y": 5800.0
+            },
+            "Max": {
+              "X": 103800.0,
+              "Y": 6500.0
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.RoofPolylineObject, LZ.ViewPlanCreate",
+          "Kind": 5,
+          "Closed": false,
+          "Vertices": [
+            {
+              "X": 105600.0,
+              "Y": 7000.0
+            },
+            {
+              "X": 105600.0,
+              "Y": 22100.0
+            }
+          ],
+          "Bounds": {
+            "Min": {
+              "X": 105600.0,
+              "Y": 7000.0
+            },
+            "Max": {
+              "X": 105600.0,
+              "Y": 22100.0
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.RoofPolylineObject, LZ.ViewPlanCreate",
+          "Kind": 6,
+          "Closed": false,
+          "Vertices": [
+            {
+              "X": 102000.0,
+              "Y": 9427.5
+            },
+            {
+              "X": 101900.0,
+              "Y": 9427.5
+            }
+          ],
+          "Bounds": {
+            "Min": {
+              "X": 101900.0,
+              "Y": 9427.5
+            },
+            "Max": {
+              "X": 102000.0,
+              "Y": 9427.5
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.RoofPolylineObject, LZ.ViewPlanCreate",
+          "Kind": 6,
+          "Closed": false,
+          "Vertices": [
+            {
+              "X": 102000.0,
+              "Y": 17022.5
+            },
+            {
+              "X": 101900.0,
+              "Y": 17022.5
+            }
+          ],
+          "Bounds": {
+            "Min": {
+              "X": 101900.0,
+              "Y": 17022.5
+            },
+            "Max": {
+              "X": 102000.0,
+              "Y": 17022.5
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.RoofPolylineObject, LZ.ViewPlanCreate",
+          "Kind": 6,
+          "Closed": false,
+          "Vertices": [
+            {
+              "X": 109200.0,
+              "Y": 9427.5
+            },
+            {
+              "X": 109300.0,
+              "Y": 9427.5
+            }
+          ],
+          "Bounds": {
+            "Min": {
+              "X": 109200.0,
+              "Y": 9427.5
+            },
+            "Max": {
+              "X": 109300.0,
+              "Y": 9427.5
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.RoofPolylineObject, LZ.ViewPlanCreate",
+          "Kind": 6,
+          "Closed": false,
+          "Vertices": [
+            {
+              "X": 109200.0,
+              "Y": 17022.5
+            },
+            {
+              "X": 109300.0,
+              "Y": 17022.5
+            }
+          ],
+          "Bounds": {
+            "Min": {
+              "X": 109200.0,
+              "Y": 17022.5
+            },
+            "Max": {
+              "X": 109300.0,
+              "Y": 17022.5
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.RoofPolylineObject, LZ.ViewPlanCreate",
+          "Kind": 6,
+          "Closed": false,
+          "Vertices": [
+            {
+              "X": 105600.0,
+              "Y": 7000.0
+            },
+            {
+              "X": 105600.0,
+              "Y": 6900.0
+            }
+          ],
+          "Bounds": {
+            "Min": {
+              "X": 105600.0,
+              "Y": 6900.0
+            },
+            "Max": {
+              "X": 105600.0,
+              "Y": 7000.0
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.RoofPolylineObject, LZ.ViewPlanCreate",
+          "Kind": 6,
+          "Closed": false,
+          "Vertices": [
+            {
+              "X": 105600.0,
+              "Y": 22100.0
+            },
+            {
+              "X": 105600.0,
+              "Y": 22200.0
+            }
+          ],
+          "Bounds": {
+            "Min": {
+              "X": 105600.0,
+              "Y": 22100.0
+            },
+            "Max": {
+              "X": 105600.0,
+              "Y": 22200.0
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.RoofRainPipeObject, LZ.ViewPlanCreate",
+          "Center": {
+            "X": 101955.0,
+            "Y": 6955.0
+          },
+          "Diameter": 110.0,
+          "Bounds": {
+            "Min": {
+              "X": 101900.0,
+              "Y": 6900.0
+            },
+            "Max": {
+              "X": 102010.0,
+              "Y": 7010.0
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.RoofRainPipeObject, LZ.ViewPlanCreate",
+          "Center": {
+            "X": 109245.0,
+            "Y": 6955.0
+          },
+          "Diameter": 110.0,
+          "Bounds": {
+            "Min": {
+              "X": 109190.0,
+              "Y": 6900.0
+            },
+            "Max": {
+              "X": 109300.0,
+              "Y": 7010.0
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.RoofRainPipeObject, LZ.ViewPlanCreate",
+          "Center": {
+            "X": 101955.0,
+            "Y": 22145.0
+          },
+          "Diameter": 110.0,
+          "Bounds": {
+            "Min": {
+              "X": 101900.0,
+              "Y": 22090.0
+            },
+            "Max": {
+              "X": 102010.0,
+              "Y": 22200.0
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.RoofRainPipeObject, LZ.ViewPlanCreate",
+          "Center": {
+            "X": 109245.0,
+            "Y": 22145.0
+          },
+          "Diameter": 110.0,
+          "Bounds": {
+            "Min": {
+              "X": 109190.0,
+              "Y": 22090.0
+            },
+            "Max": {
+              "X": 109300.0,
+              "Y": 22200.0
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.RoofRainPipeObject, LZ.ViewPlanCreate",
+          "Center": {
+            "X": 101950.0,
+            "Y": 11900.0
+          },
+          "Diameter": 110.0,
+          "Bounds": {
+            "Min": {
+              "X": 101895.0,
+              "Y": 11845.0
+            },
+            "Max": {
+              "X": 102005.0,
+              "Y": 11955.0
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.RoofRainPipeObject, LZ.ViewPlanCreate",
+          "Center": {
+            "X": 109250.0,
+            "Y": 11900.0
+          },
+          "Diameter": 110.0,
+          "Bounds": {
+            "Min": {
+              "X": 109195.0,
+              "Y": 11845.0
+            },
+            "Max": {
+              "X": 109305.0,
+              "Y": 11955.0
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.RoofHatchObject, LZ.ViewPlanCreate",
+          "OuterBoundaryVertices": [
+            {
+              "X": 101500.0,
+              "Y": 6500.0
+            },
+            {
+              "X": 109700.0,
+              "Y": 6500.0
+            },
+            {
+              "X": 109700.0,
+              "Y": 22600.0
+            },
+            {
+              "X": 101500.0,
+              "Y": 22600.0
+            }
+          ],
+          "InnerBoundaryVertices": [
+            {
+              "X": 101800.0,
+              "Y": 6800.0
+            },
+            {
+              "X": 109400.0,
+              "Y": 6800.0
+            },
+            {
+              "X": 109400.0,
+              "Y": 22300.0
+            },
+            {
+              "X": 101800.0,
+              "Y": 22300.0
+            }
+          ],
+          "Bounds": {
+            "Min": {
+              "X": 101500.0,
+              "Y": 6500.0
+            },
+            "Max": {
+              "X": 109700.0,
+              "Y": 22600.0
+            }
+          }
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.RoofDetailBlockObject, LZ.ViewPlanCreate",
+          "BlockName": "雨篷大样",
+          "InsertionPoint": {
+            "X": 90000.0,
+            "Y": 2000.0
+          },
+          "Scale": 4.0,
+          "Bounds": null
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.RoofDetailBlockObject, LZ.ViewPlanCreate",
+          "BlockName": "天沟挑檐大样",
+          "InsertionPoint": {
+            "X": 121000.0,
+            "Y": 18000.0
+          },
+          "Scale": 4.0,
+          "Bounds": null
+        },
+        {
+          "$type": "ViewPlanCreate.Models.PlanFunding.RoofDetailBlockObject, LZ.ViewPlanCreate",
+          "BlockName": "滴水大样",
+          "InsertionPoint": {
+            "X": 120000.0,
+            "Y": 12000.0
+          },
+          "Scale": 20.0,
+          "Bounds": null
+        }
+      ]
+    }
+  ]
+}</script>
+<script src="js/white-model.js"></script>
+</body>
+</html>
