@@ -11,6 +11,7 @@ white-model-viewer/   白模查看器（主交付物）
   lib/                three.js r128 + OrbitControls（本地依赖）
   data/sample.json    示例 JSON
   tools/cdp-shot.mjs  无头浏览器截图脚本
+Flie/输入文件/         原始输入资料（JSON、JSON 说明、DWG/DXF 图纸）
 ```
 
 ## 快速开始

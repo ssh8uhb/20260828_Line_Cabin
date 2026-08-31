@@ -7,8 +7,6 @@ Thumbs.db
 white-model-viewer/shot*.png
 white-model-viewer/*.tmp
 
-# 输入文件（图纸/JSON 原始资料不入库，如需入库请单独确认）
-Flie/
 
 # 第三方参考仓库
 pure-line-room/
