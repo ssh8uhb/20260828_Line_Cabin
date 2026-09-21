@@ -20,6 +20,7 @@ const state = {
   log: [],             // 数据摘要 / 告警
   warnings: [],
   labels: [],          // 文字标签精灵
+  lineOverlays: [],    // 线稿叠加层
 };
 
 function log(msg) { state.log.push(msg); }
@@ -100,6 +101,8 @@ const M = {
   column:  new THREE.MeshStandardMaterial({ color: 0xfafafa, roughness: 0.8 }),
   ground:  new THREE.MeshStandardMaterial({ color: 0xdedede, roughness: 1 }),
   annot:   new THREE.LineBasicMaterial({ color: 0x9a9a9a, transparent: true, opacity: 0.8 }),
+  glass:   new THREE.MeshStandardMaterial({ color: 0xf2f2f2, roughness: 0.12, metalness: 0.05, transparent: true, opacity: 0.45 }),
+  handle:  new THREE.MeshStandardMaterial({ color: 0xd4d4d4, roughness: 0.35, metalness: 0.2 }),
 };
 
 function makeGroup(name) {
@@ -538,8 +541,51 @@ function openingIntervalOnWall(wall, cx, cy, w) {
   return { a0: a0, a1: a1, L: L, alongY: alongY };
 }
 
+/* 找包含洞口（中心+宽度）的墙 */
+function findHostWall(walls, cx, cy, w) {
+  for (const wall of walls) {
+    if (openingIntervalOnWall(wall, cx, cy, w)) return wall;
+  }
+  return null;
+}
+
+/* 线稿叠加通道：对主要实体组按二面角阈值（30°）提取棱边黑线，挂到各自 mesh 下 */
+function buildEdgeLines() {
+  const names = ['walls', 'slabs', 'columns', 'roof', 'stairs', 'extra', 'families'];
+  const lineMat = new THREE.LineBasicMaterial({
+    color: 0x000000,
+    polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1,
+  });
+  let n = 0;
+  for (const name of names) {
+    const grp = state.groups[name];
+    if (!grp) continue;
+    grp.traverse(o => {
+      if (!o.isMesh || !o.geometry || !o.geometry.attributes ||
+          !o.geometry.attributes.position) return;
+      let edges = null;
+      try { edges = new THREE.EdgesGeometry(o.geometry, 30); }
+      catch (e) { return; }
+      if (!edges.attributes.position.count) { edges.dispose(); return; }
+      const ls = new THREE.LineSegments(edges, lineMat);
+      ls.visible = false;              /* 默认隐藏，勾选“线稿叠加”或 ?lines=1 时显示 */
+      o.add(ls);
+      state.lineOverlays.push(ls);
+      n++;
+    });
+  }
+  state.lineCount = n;
+}
+
+function setLinesVisible(on) {
+  for (const ls of state.lineOverlays) ls.visible = on;
+  const el = document.getElementById('chk_lines');
+  if (el) el.checked = !!on;
+}
+
 /* ---------------- 模型生成 ---------------- */
-function buildModel(json) {
+function buildModel(json, extras) {
+  extras = extras || {};
   const data = parseDrawing(json);
   const L = buildLevels(data);
 
@@ -551,6 +597,7 @@ function buildModel(json) {
     stairs: makeGroup('stairs'),
     extra: makeGroup('extra'),
     ground: makeGroup('ground'),
+    families: makeGroup('families'),
     annot: makeGroup('annot'),
   };
 
@@ -581,12 +628,14 @@ function buildModel(json) {
   const openings = [];
   for (const d of data.doors) {
     const z0 = floorAt(L, data.platform, d.cx, d.cy);
-    openings.push({ type: 'door', num: d.num, cx: d.cx, cy: d.cy, w: d.w, z0: z0, z1: z0 + d.h });
+    openings.push({ type: 'door', num: d.num, kind: d.kind, exterior: d.exterior,
+                    cx: d.cx, cy: d.cy, w: d.w, h: d.h, z0: z0, z1: z0 + d.h });
   }
   for (const wnd of data.windows) {
     const floor = floorAt(L, data.platform, wnd.cx, wnd.cy);
     const z0 = floor + 900; /* 窗台高 900 */
-    openings.push({ type: 'win', num: wnd.num, cx: wnd.cx, cy: wnd.cy, w: wnd.w, z0: z0, z1: z0 + wnd.h });
+    openings.push({ type: 'win', num: wnd.num, kind: wnd.kind,
+                    cx: wnd.cx, cy: wnd.cy, w: wnd.w, h: wnd.h, z0: z0, z1: z0 + wnd.h });
   }
 
   for (const wall of data.walls) {
@@ -619,16 +668,27 @@ function buildModel(json) {
     addBox(G.columns, c.x - c.l / 2, c.y - c.w / 2, c.x + c.l / 2, c.y + c.w / 2, L.base, L.roof, M.column);
   }
 
-  /* ---- 屋面 ---- */
+  /* ---- 屋面（屋面板 + 挑檐截面放样 + 雨篷 + 雨水管） ---- */
   if (data.roofOuter) {
-    const e = data.roofEaves;
-    let x0, y0, x1, y1;
-    if (e) { x0 = e.x0; y0 = e.y0; x1 = e.x1; y1 = e.y1; }
-    else {
-      x0 = data.roofOuter.x0 - 500; y0 = data.roofOuter.y0 - 500;
-      x1 = data.roofOuter.x1 + 500; y1 = data.roofOuter.y1 + 500;
+    const r = data.roofOuter;
+    const prof = (extras && extras.eavesProfile) || null;
+    if (prof && window.WMEaves) {
+      /* 屋面板覆盖建筑投影；挑檐外沿由截面沿外墙路径放样生成 */
+      addBox(G.roof, r.x0, r.y0, r.x1, r.y1, L.roof - 150, L.roof, M.roof);
+      const en = window.WMEaves.build(G.roof,
+        { rect: { x0: r.x0, y0: r.y0, x1: r.x1, y1: r.y1 }, roofZ: L.roof },
+        prof, M.roof);
+      log(`挑檐：${prof.name || '自定义截面'} 放样生成 ${en} 个面`);
+    } else {
+      const e = data.roofEaves;
+      let x0, y0, x1, y1;
+      if (e) { x0 = e.x0; y0 = e.y0; x1 = e.x1; y1 = e.y1; }
+      else {
+        x0 = r.x0 - 500; y0 = r.y0 - 500;
+        x1 = r.x1 + 500; y1 = r.y1 + 500;
+      }
+      addBox(G.roof, x0, y0, x1, y1, L.roof - 150, L.roof, M.roof);
     }
-    addBox(G.roof, x0, y0, x1, y1, L.roof - 150, L.roof, M.roof);
     for (const c of data.roofCanopies) {
       addBox(G.roof, c.x0, c.y0, c.x1, c.y1, L.roof - 150, L.roof, M.roof);
     }
@@ -697,11 +757,17 @@ function buildModel(json) {
   }
 
   /* ---- 地面 + 散水 ---- */
-  /* 地面开洞避开下沉的水泵间（北半部） */
-  addShapeRing(G.ground,
-    [{ x: -4000, y: -4000 }, { x: 12000, y: -4000 }, { x: 12000, y: 20000 }, { x: -4000, y: 20000 }],
-    [{ x: 0, y: 4800 }, { x: 7200, y: 4800 }, { x: 7200, y: 15100 }, { x: 0, y: 15100 }],
-    L.grade, M.ground);
+  const terrain = (extras && extras.terrain) || null;
+  if (terrain && window.WMTerrain) {
+    const tn = window.WMTerrain.build(G.ground, terrain.objText, terrain.reg, L, M.ground);
+    log(`地面：三角网地形已载入（${tn} 个三角形）`);
+  } else {
+    /* 平面环地面（开洞避开下沉的水泵间北半部） */
+    addShapeRing(G.ground,
+      [{ x: -4000, y: -4000 }, { x: 12000, y: -4000 }, { x: 12000, y: 20000 }, { x: -4000, y: 20000 }],
+      [{ x: 0, y: 4800 }, { x: 7200, y: 4800 }, { x: 7200, y: 15100 }, { x: 0, y: 15100 }],
+      L.grade, M.ground);
+  }
   if (data.apron) {
     addShapeRing(G.ground, data.apron.outer, data.apron.inner, L.grade + 5, M.ground);
     addLineLoop(G.ground, data.apron.outer, L.grade + 10);
@@ -729,6 +795,32 @@ function buildModel(json) {
   if (data.sump) {
     addTextSprite('集水坑', (data.sump.x0 + data.sump.x1) / 2, (data.sump.y0 + data.sump.y1) / 2, L.base + 200, 700);
   }
+
+  /* ---- 门窗族实例 ---- */
+  if (window.WMFamilies && openings.length) {
+    const bcx = (0 + 7200) / 2, bcy = (0 + 15100) / 2;
+    for (const op of openings) {
+      const host = findHostWall(data.walls, op.cx, op.cy, op.w);
+      if (!host) continue;
+      op.tw = Math.min(host.x1 - host.x0, host.y1 - host.y0);
+      const alongY = (host.y1 - host.y0) >= (host.x1 - host.x0);
+      op.ax = alongY ? 0 : 1;
+      op.ay = alongY ? 1 : 0;
+      const nx = alongY ? 1 : 0, ny = alongY ? 0 : 1;
+      const inward = (op.cx - bcx) * nx + (op.cy - bcy) * ny < 0;
+      op.nx = inward ? -nx : nx;
+      op.ny = inward ? -ny : ny;
+      op.placed = true;
+    }
+    const placed = openings.filter(o => o.placed);
+    const famRes = window.WMFamilies.build(G.families, placed, {
+      frame: M.wall, leaf: M.slab, glass: M.glass, handle: M.handle,
+    });
+    log(`门窗族：${famRes.total} 组（门 ${placed.filter(o => o.type === 'door').length} · 窗 ${placed.filter(o => o.type === 'win').length}）`);
+  }
+
+  /* ---- 线稿叠加通道 ---- */
+  buildEdgeLines();
 
   /* ---- 统计 ---- */
   log(`墙体 ${data.walls.length} 面（含开洞）`);
@@ -760,14 +852,65 @@ function bindUI() {
       while (g.children.length) g.remove(g.children[0]);
     }
     for (const s of state.labels) scene.remove(s);
-    state.groups = {}; state.labels = []; state.log = []; state.warnings = [];
+    state.groups = {}; state.labels = []; state.lineOverlays = [];
+    state.log = []; state.warnings = [];
   }
 
-  function build(json) {
+  function syncRead(url) {
+    try {
+      const x = new XMLHttpRequest();
+      x.open('GET', url, false);
+      x.send(null);
+      return (x.status === 200) ? x.responseText : null;
+    } catch (e) { return null; }
+  }
+
+  async function resolveExtras() {
+    const readJSON = async (inlineId, url) => {
+      if (STATIC) {
+        const txt = syncRead(url);
+        if (txt !== null) { try { return JSON.parse(txt); } catch (e) {} }
+      } else {
+        try { const r = await fetch(url); if (r.ok) return await r.json(); } catch (e) {}
+      }
+      const el = document.getElementById(inlineId);
+      if (el && el.textContent.trim()) { try { return JSON.parse(el.textContent); } catch (e) {} }
+      return null;
+    };
+    const readText = async (inlineId, url) => {
+      if (STATIC) {
+        const txt = syncRead(url);
+        if (txt !== null) return txt;
+      } else {
+        try { const r = await fetch(url); if (r.ok) return await r.text(); } catch (e) {}
+      }
+      const el = document.getElementById(inlineId);
+      if (el && el.textContent.trim()) return el.textContent;
+      return null;
+    };
+    const [eavesProfile, terrainReg, terrainObj] = await Promise.all([
+      readJSON('eavesProfileData', 'data/eaves-profile.json'),
+      readJSON('terrainRegData', 'data/terrain-registration.json'),
+      readText('terrainObjData', 'data/terrain.obj'),
+    ]);
+    const terrain = (terrainReg && terrainObj) ? { reg: terrainReg, objText: terrainObj } : null;
+    return { eavesProfile, terrain };
+  }
+
+  function applyUrlParams() {
+    const p = new URLSearchParams(location.search);
+    if (p.get('lines') === '1') setLinesVisible(true);
+    const bg = p.get('bg');
+    if (bg && /^[0-9a-fA-F]{6}$/.test(bg)) scene.background = new THREE.Color('#' + bg);
+  }
+
+  async function build(json) {
     clearModel();
     try {
-      const { data, L } = buildModel(json);
+      const extras = await resolveExtras();
+      const { data, L } = buildModel(json, extras);
       state.modelBuilt = true;
+      applyUrlParams();
       controls.update();
       renderer.render(scene, camera);   /* 立即渲染一帧，保证截图/首帧可见 */
       stats.innerHTML =
@@ -812,7 +955,7 @@ function bindUI() {
   const chkMap = {
     chk_walls: 'walls', chk_slabs: 'slabs', chk_columns: 'columns',
     chk_roof: 'roof', chk_stairs: 'stairs', chk_extra: 'extra',
-    chk_ground: 'ground', chk_annot: 'annot',
+    chk_ground: 'ground', chk_families: 'families', chk_annot: 'annot',
   };
   for (const id in chkMap) {
     const el = document.getElementById(id);
@@ -821,6 +964,10 @@ function bindUI() {
       if (g) g.visible = el.checked;
       for (const s of state.labels) s.visible = document.getElementById('chk_annot').checked;
     });
+  }
+  const chkLines = document.getElementById('chk_lines');
+  if (chkLines) {
+    chkLines.addEventListener('change', () => setLinesVisible(chkLines.checked));
   }
 
   /* 默认尝试加载示例 JSON */

@@ -48,7 +48,9 @@
   <button id="loadBtn">选择 / 拖入 JSON 文件</button>
   <input type="file" id="fileInput" accept=".json,application/json">
   <div style="margin:6px 0 2px;color:#888;">显示控制</div>
+  <label class="row"><input type="checkbox" id="chk_lines"> 线稿叠加（黑线通道）</label>
   <label class="row"><input type="checkbox" id="chk_walls" checked> 墙体（含门窗洞口）</label>
+  <label class="row"><input type="checkbox" id="chk_families" checked> 门窗构件（框/扇/玻璃）</label>
   <label class="row"><input type="checkbox" id="chk_slabs" checked> 楼板 / 平台</label>
   <label class="row"><input type="checkbox" id="chk_columns" checked> 结构柱</label>
   <label class="row"><input type="checkbox" id="chk_roof" checked> 屋面（檐口/雨篷）</label>
@@ -72,6 +74,20 @@
 
 <script src="lib/three.min.js"></script>
 <script src="lib/OrbitControls.js"></script>
+<script type="application/json" id="eavesProfileData">{
+  "name": "挑檐占位截面（平板 500x150）",
+  "pathType": "wallFace",
+  "unit": "mm",
+  "profile": [
+    [0, -150],
+    [500, -150],
+    [500, 0],
+    [0, 0]
+  ]
+}</script>
+<script src="js/families.js"></script>
+<script src="js/eaves.js"></script>
+<script src="js/terrain.js"></script>
 <script type="application/json" id="sampleData">{
   "DrawingName": "平面图提资_20260831",
   "DrawingPath": "C:\\项目\\项目01\\提资文件\\建筑\\平面图提资_20260831.dwg",
