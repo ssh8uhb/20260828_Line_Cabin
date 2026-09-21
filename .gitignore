@@ -10,3 +10,8 @@ white-model-viewer/*.tmp
 
 # 第三方参考仓库
 pure-line-room/
+
+# 仓库根目录的无关截图（保留在本地，不提交）
+/*.png.jpg
+/*.jpg
+/*.png
