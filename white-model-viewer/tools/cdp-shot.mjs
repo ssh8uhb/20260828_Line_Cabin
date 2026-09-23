@@ -1,19 +1,33 @@
 /* CDP 无头截图脚本：启动本机 Chrome，打开页面，等待渲染后截图并保存。
- * 用法: node tools/cdp-shot.mjs <url> <输出png> [等待秒数]
+ * 用法1（单张，兼容旧用法）: node tools/cdp-shot.mjs <url> <输出png> [等待秒数]
+ * 用法2（批量）: node tools/cdp-shot.mjs <url> <输出目录> [等待秒数] [--views=v1,v2|all] [--channels=color,depth,normal]
+ *   批量模式循环 视角 × 通道，输出 <视角>-<通道>.png 与 manifest.json（含相机参数，便于跨版本比对）。
+ *   批量模式依赖页面暴露的 window.WMShot 接口；不要与 ?static=1 同用（static 模式渲染 8 帧后停帧）。
  * 依赖: 本机安装的 Chrome / Edge；Node 22+（使用内置 WebSocket）。
  */
 import { spawn } from 'node:child_process';
-import { mkdtempSync, writeFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, existsSync, mkdirSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
-const [url, outFile, waitSec] = process.argv.slice(2);
-if (!url || !outFile) {
-  console.error('用法: node cdp-shot.mjs <url> <输出png> [等待秒数]');
+const argv = process.argv.slice(2);
+const url = argv[0];
+const outPath = argv[1];
+const waitSec = argv.find((a, i) => i >= 2 && !a.startsWith('--'));
+const flags = argv.filter(a => a.startsWith('--'));
+function flagVal(name) {
+  const f = flags.find(f => f === '--' + name || f.startsWith('--' + name + '='));
+  if (!f) return null;
+  const eq = f.indexOf('=');
+  return eq >= 0 ? f.slice(eq + 1) : true;
+}
+if (!url || !outPath) {
+  console.error('用法: node cdp-shot.mjs <url> <输出png|输出目录> [等待秒数] [--views=v1,v2|all] [--channels=color,depth,normal]');
   process.exit(1);
 }
 const waitMs = (waitSec ? parseFloat(waitSec) : 8) * 1000;
+const batch = flags.length > 0 || !/\.png$/i.test(outPath);
 const profile = mkdtempSync(join(tmpdir(), 'cdp-shot-'));
 
 const candidates = [
@@ -108,10 +122,63 @@ try {
   });
   console.log('页面状态:', evalRes.result.value);
 
-  const shot = await send('Page.captureScreenshot', { format: 'png', fromSurface: true });
-  const out = resolve(outFile);
-  writeFileSync(out, Buffer.from(shot.data, 'base64'));
-  console.log('截图已保存:', out);
+  async function evalBool(expression) {
+    const r = await send('Runtime.evaluate', { expression, returnByValue: true });
+    return r && r.result ? r.result.value : undefined;
+  }
+
+  async function runBatch() {
+    for (let i = 0; i < 40; i++) {
+      if (await evalBool('!!(window.WMShot && window.WMShot.built && window.WMShot.built())')) break;
+      await sleep(500);
+    }
+    const ready = await evalBool('!!(window.WMShot && window.WMShot.built && window.WMShot.built())');
+    if (!ready) throw new Error('页面模型未构建完成（window.WMShot.built() 为 false），请检查 URL 与 JSON');
+
+    const allViews = JSON.parse(
+      (await send('Runtime.evaluate', { expression: 'JSON.stringify(window.WMShot.views())', returnByValue: true })).result.value);
+    const vRaw = flagVal('views');
+    const vSel = (vRaw === null || vRaw === true) ? 'all' : String(vRaw);
+    const views = (vSel === 'all') ? allViews : vSel.split(',').map(s => s.trim()).filter(Boolean);
+    const cRaw = flagVal('channels');
+    const channels = String(cRaw === true || cRaw === null ? 'color' : cRaw)
+      .split(',').map(s => s.trim()).filter(Boolean);
+    const outDir = resolve(outPath);
+    mkdirSync(outDir, { recursive: true });
+
+    const manifest = { url, generatedAt: new Date().toISOString(), views: [] };
+    for (const v of views) {
+      const ok = await evalBool(`window.WMShot.view(${JSON.stringify(v)})`);
+      if (ok !== true) { console.error('未知视角，已跳过:', v); continue; }
+      await sleep(600);   /* 等 OrbitControls 收敛、渲染稳定 */
+      const info = JSON.parse(
+        (await send('Runtime.evaluate', { expression: 'window.WMShot.info()', returnByValue: true })).result.value);
+      const files = [];
+      for (const c of channels) {
+        await evalBool(`window.WMShot.channel(${JSON.stringify(c)})`);
+        await sleep(300);
+        const shot = await send('Page.captureScreenshot', { format: 'png', fromSurface: true });
+        const name = `${v}-${c}.png`;
+        writeFileSync(join(outDir, name), Buffer.from(shot.data, 'base64'));
+        files.push(name);
+        console.log('截图已保存:', join(outDir, name));
+      }
+      manifest.views.push({ name: v, camera: info.camera, bounds: info.bounds, files });
+      await evalBool("window.WMShot.channel('color')");
+      await sleep(150);
+    }
+    writeFileSync(join(outDir, 'manifest.json'), JSON.stringify(manifest, null, 2), 'utf8');
+    console.log(`批量出图完成：${manifest.views.length} 视角 × ${channels.length} 通道 → ${outDir}`);
+  }
+
+  if (batch) {
+    await runBatch();
+  } else {
+    const shot = await send('Page.captureScreenshot', { format: 'png', fromSurface: true });
+    const out = resolve(outPath);
+    writeFileSync(out, Buffer.from(shot.data, 'base64'));
+    console.log('截图已保存:', out);
+  }
   ws.close();
 } catch (e) {
   console.error('失败:', e.message);

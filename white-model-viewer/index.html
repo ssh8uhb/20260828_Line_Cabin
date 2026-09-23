@@ -48,12 +48,22 @@
   <button id="loadBtn">选择 / 拖入 JSON 文件</button>
   <input type="file" id="fileInput" accept=".json,application/json">
   <div style="margin:6px 0 2px;color:#888;">显示控制</div>
-  <label class="row"><input type="checkbox" id="chk_lines"> 线稿叠加（黑线通道）</label>
+  <div style="display:flex;gap:6px;margin-bottom:6px;">
+    <button id="btn_select_all" style="flex:1;padding:4px;font-size:12px;border:1px solid #ddd;border-radius:4px;background:#fff;cursor:pointer;">全选</button>
+    <button id="btn_deselect_all" style="flex:1;padding:4px;font-size:12px;border:1px solid #ddd;border-radius:4px;background:#fff;cursor:pointer;">取消全选</button>
+  </div>
+  <label class="row">出图通道&nbsp;<select id="sel_channel" style="flex:1;padding:2px;font-size:12px;border:1px solid #ddd;border-radius:4px;background:#fff;color:#333;">
+    <option value="color">素模（彩色）</option>
+    <option value="depth">深度 depth</option>
+    <option value="normal">法线 normal</option>
+  </select></label>
+  <label class="row"><input type="checkbox" id="chk_lines" checked> 线稿叠加（黑线通道）</label>
   <label class="row"><input type="checkbox" id="chk_walls" checked> 墙体（含门窗洞口）</label>
   <label class="row"><input type="checkbox" id="chk_families" checked> 门窗构件（框/扇/玻璃）</label>
   <label class="row"><input type="checkbox" id="chk_slabs" checked> 楼板 / 平台</label>
   <label class="row"><input type="checkbox" id="chk_columns" checked> 结构柱</label>
-  <label class="row"><input type="checkbox" id="chk_roof" checked> 屋面（檐口/雨篷）</label>
+  <label class="row"><input type="checkbox" id="chk_roof" checked> 屋面（檐口）</label>
+  <label class="row"><input type="checkbox" id="chk_canopies" checked> 雨篷</label>
   <label class="row"><input type="checkbox" id="chk_stairs" checked> 楼梯 / 爬梯</label>
   <label class="row"><input type="checkbox" id="chk_extra" checked> 基础 / 集水坑 / 坡道</label>
   <label class="row"><input type="checkbox" id="chk_ground" checked> 地面 / 散水</label>
@@ -75,14 +85,29 @@
 <script src="lib/three.min.js"></script>
 <script src="lib/OrbitControls.js"></script>
 <script type="application/json" id="eavesProfileData">{
-  "name": "挑檐占位截面（平板 500x150）",
+  "name": "天沟挑檐截面（坡面）",
   "pathType": "wallFace",
   "unit": "mm",
   "profile": [
-    [0, -150],
-    [500, -150],
-    [500, 0],
-    [0, 0]
+    [0, 0],
+    [1100, 0],
+    [1100, 100],
+    [1200, 100],
+    [1200, 150],
+    [0, 630]
+  ]
+}</script>
+<script type="application/json" id="canopyProfileData">{
+  "name": "雨篷截面",
+  "source": "立面构件.dxf 黄色轮廓线（w=1200, h=630）",
+  "unit": "mm",
+  "profile": [
+    [0, 0],
+    [1100, 0],
+    [1100, 100],
+    [1200, 100],
+    [1200, 150],
+    [0, 630]
   ]
 }</script>
 <script src="js/families.js"></script>

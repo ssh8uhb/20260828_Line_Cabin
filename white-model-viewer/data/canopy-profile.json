@@ -1,6 +1,6 @@
 {
-  "name": "天沟挑檐截面（坡面）",
-  "pathType": "wallFace",
+  "name": "雨篷截面",
+  "source": "立面构件.dxf 黄色轮廓线（w=1200, h=630）",
   "unit": "mm",
   "profile": [
     [0, 0],

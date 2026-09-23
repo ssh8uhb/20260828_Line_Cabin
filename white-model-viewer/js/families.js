@@ -49,15 +49,16 @@ function addPiece(g, op, u0, u1, v0, v1, n0, n1, mat) {
 
   const U = new THREE.Vector3(op.ax, 0, op.ay).normalize();
   const V = new THREE.Vector3(0, 1, 0);
-  const N = new THREE.Vector3(op.nx, 0, op.ny).normalize();
+  /* n 正方向指向室内（外法线反方向） */
+  const N = new THREE.Vector3(-op.nx, 0, -op.ny).normalize();
   const m = new THREE.Matrix4().makeBasis(U, V, N);
   mesh.quaternion.setFromRotationMatrix(m);
 
   const um = (u0 + u1) / 2, vm = (v0 + v1) / 2, nm = (n0 + n1) / 2;
   mesh.position.set(
-    op.cx + um * op.ax + nm * op.nx,
+    op.cx + um * op.ax + nm * (-op.nx),
     op.z0 + vm,
-    op.cy + um * op.ay + nm * op.ny
+    op.cy + um * op.ay + nm * (-op.ny)
   );
   mesh.castShadow = true;
   mesh.receiveShadow = true;

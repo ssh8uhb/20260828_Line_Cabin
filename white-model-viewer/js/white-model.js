@@ -21,6 +21,13 @@ const state = {
   warnings: [],
   labels: [],          // 文字标签精灵
   lineOverlays: [],    // 线稿叠加层
+  auxLines: [],        // 所有线条对象（辅助通道中隐藏）
+  bounds: null,        // 建筑包围盒（视图预设用）
+  levels: null,        // 标高表（视图预设用）
+  channel: 'color',    // 出图通道 color / depth / normal
+  linesOn: false,      // 线稿开关状态
+  labelsOn: true,      // 文字标注开关状态
+  baseBackground: null,
 };
 
 function log(msg) { state.log.push(msg); }
@@ -32,7 +39,8 @@ const STATIC = /[?&]static=1/.test(location.search);
 function initThree() {
   const container = document.getElementById('viewer');
   scene = new THREE.Scene();
-  scene.background = new THREE.Color(0xe9e9e9);
+  state.baseBackground = new THREE.Color(0xe9e9e9);
+  scene.background = state.baseBackground;
 
   camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 10, 300000);
   camera.position.set(13000, 10000, 21500);
@@ -130,7 +138,10 @@ function addLineLoop(g, pts, z, mat) {
   const v = [];
   for (const p of pts) v.push(new THREE.Vector3(p.x, z, p.y));
   const geo = new THREE.BufferGeometry().setFromPoints(v);
-  g.add(new THREE.LineLoop(geo, mat || M.annot));
+  const line = new THREE.LineLoop(geo, mat || M.annot);
+  state.auxLines.push(line);
+  g.add(line);
+  return line;
 }
 
 /* 斜顶盒子（坡道）：底面 zA0→zA1、顶面 zB0→zB1，沿 X 或沿 Y 方向找坡 */
@@ -168,18 +179,122 @@ function addSlopedBox(g, x0, x1, y0, y1, zA0, zA1, zB0, zB1, mat, alongY) {
   return mesh;
 }
 
+/* 门口坡道楔块：截面为直角三角形——水平长边贴室外地坪、竖直短边贴墙，
+ * 斜面（斜边）为行走面，坡端收成薄边。wallPos = 墙外表面顺坡向坐标，
+ * dir = 出墙方向（±1），c = 宽度方向中心，alongY = 坡道沿 Y 伸出。 */
+function addRampWedge(g, wallPos, dir, len, c, width, bottomZ, topZ, mat, alongY) {
+  const hw = width / 2, w0 = c - hw, w1 = c + hw;
+  const tip = wallPos + dir * len;
+  function P(u, s, w) { return alongY ? [w, s, u] : [u, s, w]; }
+  const A0 = P(wallPos, bottomZ, w0), B0 = P(tip, bottomZ, w0), C0 = P(wallPos, topZ, w0);
+  const A1 = P(wallPos, bottomZ, w1), B1 = P(tip, bottomZ, w1), C1 = P(wallPos, topZ, w1);
+  const faces = [
+    [A0, B0, B1], [A0, B1, A1],   /* 底面：贴地 */
+    [A0, C1, C0], [A0, A1, C1],   /* 墙侧面：贴墙 */
+    [B0, C0, C1], [B0, C1, B1],   /* 斜面：行走面 */
+    [A0, B0, C0],                 /* 两端三角形端面：封口成实体 */
+    [A1, B1, C1],
+  ];
+  /* 以形心为基准统一修正绕序：法线一律朝外，depth/normal 通道不会丢面 */
+  const all = [A0, B0, C0, A1, B1, C1];
+  const o = [0, 0, 0];
+  for (const p of all) for (let i = 0; i < 3; i++) o[i] += p[i] / all.length;
+  function outward(tri) {
+    const p0 = tri[0], p1 = tri[1], p2 = tri[2];
+    const e1 = [p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]];
+    const e2 = [p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2]];
+    const nx = e1[1] * e2[2] - e1[2] * e2[1];
+    const ny = e1[2] * e2[0] - e1[0] * e2[2];
+    const nz = e1[0] * e2[1] - e1[1] * e2[0];
+    const fc = [(p0[0] + p1[0] + p2[0]) / 3 - o[0],
+                (p0[1] + p1[1] + p2[1]) / 3 - o[1],
+                (p0[2] + p1[2] + p2[2]) / 3 - o[2]];
+    return (nx * fc[0] + ny * fc[1] + nz * fc[2]) >= 0 ? tri : [p0, p2, p1];
+  }
+  const verts = [];
+  for (const f of faces) {
+    for (const p of outward(f)) verts.push(p[0], p[1], p[2]);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(verts), 3));
+  geo.computeVertexNormals();
+  const mat2 = mat.clone();
+  mat2.side = THREE.DoubleSide;
+  const mesh = new THREE.Mesh(geo, mat2);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  g.add(mesh);
+  return mesh;
+}
+
+/* 雨篷截面挤出：profile 为 [u, v] 顶点数组（u=外挑方向，v=竖向），沿 w 方向挤出长度 len
+ * 坐标约定：Three.js X=x, Y=height, Z=depth（与 addBox / addLineLoop 一致） */
+function addExtrudedCanopy(g, profile, cx, cy, wLen, nx, ny, baseZ, mat) {
+  if (!profile || profile.length < 3) return;
+  const n = profile.length;
+  const mat2 = mat.clone();
+  mat2.side = THREE.DoubleSide;
+
+  /* w 方向单位向量（水平，垂直于法线） */
+  const wx = -ny, wy = nx;
+
+  const verts = [];
+  const idx = [];
+
+  /* 侧面：profile 每条边沿 w 方向挤出形成四边形 */
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    const [u0, v0] = profile[i];
+    const [u1, v1] = profile[j];
+
+    const p00 = { x: cx + u0 * nx,              y: baseZ + v0, z: cy + u0 * ny };
+    const p10 = { x: cx + u1 * nx,              y: baseZ + v1, z: cy + u1 * ny };
+    const p11 = { x: cx + u1 * nx + wLen * wx,  y: baseZ + v1, z: cy + u1 * ny + wLen * wy };
+    const p01 = { x: cx + u0 * nx + wLen * wx,  y: baseZ + v0, z: cy + u0 * ny + wLen * wy };
+
+    const base = verts.length / 3;
+    verts.push(p00.x, p00.y, p00.z, p10.x, p10.y, p10.z, p11.x, p11.y, p11.z, p01.x, p01.y, p01.z);
+    idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
+  }
+
+  /* 两端面：w=0 和 w=wLen 处的 profile 多边形 */
+  for (let wIdx = 0; wIdx < 2; wIdx++) {
+    const w = wIdx * wLen;
+    const base = verts.length / 3;
+    for (let i = 0; i < n; i++) {
+      const [u, v] = profile[i];
+      verts.push(cx + u * nx + w * wx, baseZ + v, cy + u * ny + w * wy);
+    }
+    /* 三角扇 */
+    for (let i = 1; i < n - 1; i++) {
+      if (wIdx === 0) idx.push(base, base + i, base + i + 1);
+      else idx.push(base, base + i + 1, base + i);
+    }
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(verts), 3));
+  geo.setIndex(idx);
+  geo.computeVertexNormals();
+  const mesh = new THREE.Mesh(geo, mat2);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  g.add(mesh);
+  return mesh;
+}
+
 /* 平面环带（Shape + 孔洞），平铺在 z 高度 */
 function addShapeRing(g, outer, inner, z, mat) {
   if (!outer || outer.length < 3) return;
   const shape = new THREE.Shape();
   outer.forEach((p, i) => {
-    if (i === 0) shape.moveTo(p.x, p.y); else shape.lineTo(p.x, p.y);
+    if (i === 0) shape.moveTo(p.x, -p.y); else shape.lineTo(p.x, -p.y);
   });
   shape.closePath();
   if (inner && inner.length >= 3) {
     const hole = new THREE.Path();
     inner.forEach((p, i) => {
-      if (i === 0) hole.moveTo(p.x, p.y); else hole.lineTo(p.x, p.y);
+      if (i === 0) hole.moveTo(p.x, -p.y); else hole.lineTo(p.x, -p.y);
     });
     hole.closePath();
     shape.holes.push(hole);
@@ -194,6 +309,7 @@ function addShapeRing(g, outer, inner, z, mat) {
   g.add(mesh);
   return mesh;
 }
+
 
 function addCylinder(g, cx, cy, r, z0, z1, mat, seg) {
   const geo = new THREE.CylinderGeometry(r, r, z1 - z0, seg || 12);
@@ -220,6 +336,7 @@ function addTextSprite(text, x, y, z, scale, color) {
   const s = scale || 1100;
   sprite.scale.set(s * 6.4, s, 1);
   sprite.position.set(x, z, y);
+  scene.add(sprite);
   state.labels.push(sprite);
   return sprite;
 }
@@ -486,12 +603,13 @@ function buildLevels(data) {
   return L;
 }
 
-/* 开洞中心处的楼面高度：检修平台 / 南侧房间 = 2441，水泵间 = 0 */
-function floorAt(L, platform, x, y) {
+/* 开洞中心处的楼面高度：检修平台 / 南侧区块 = 2441，水泵间 = 0
+ * ySplit = 南侧区块与水泵间的分界线（由南侧房间轮廓推导），不硬编码 */
+function floorAt(L, platform, ySplit, x, y) {
   if (platform &&
       x >= platform.x0 - 150 && x <= platform.x1 + 150 &&
       y >= platform.y0 - 150 && y <= platform.y1 + 150) return L.south;
-  if (y < 4800) return L.south;
+  if (y < ySplit) return L.south;
   return L.base;
 }
 
@@ -551,7 +669,7 @@ function findHostWall(walls, cx, cy, w) {
 
 /* 线稿叠加通道：对主要实体组按二面角阈值（30°）提取棱边黑线，挂到各自 mesh 下 */
 function buildEdgeLines() {
-  const names = ['walls', 'slabs', 'columns', 'roof', 'stairs', 'extra', 'families'];
+  const names = ['walls', 'slabs', 'columns', 'roof', 'canopies', 'stairs', 'extra', 'families'];
   const lineMat = new THREE.LineBasicMaterial({
     color: 0x000000,
     polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1,
@@ -571,6 +689,7 @@ function buildEdgeLines() {
       ls.visible = false;              /* 默认隐藏，勾选“线稿叠加”或 ?lines=1 时显示 */
       o.add(ls);
       state.lineOverlays.push(ls);
+      state.auxLines.push(ls);
       n++;
     });
   }
@@ -578,9 +697,179 @@ function buildEdgeLines() {
 }
 
 function setLinesVisible(on) {
-  for (const ls of state.lineOverlays) ls.visible = on;
+  state.linesOn = !!on;
+  for (const ls of state.lineOverlays) ls.visible = state.linesOn;
   const el = document.getElementById('chk_lines');
-  if (el) el.checked = !!on;
+  if (el) el.checked = state.linesOn;
+}
+
+function setLabelsVisible(on) {
+  state.labelsOn = !!on;
+  for (const s of state.labels) s.visible = state.labelsOn && state.channel === 'color';
+}
+
+/* ---------------- 出图通道（color / depth / normal） ----------------
+ * depth：自定义线性深度着色（近白远黑、背景纯黑），比 MeshDepthMaterial 的
+ * 非线性屏幕深度对 ControlNet Depth 条件更友好；
+ * normal：MeshNormalMaterial（视野空间法线，朝向面 ≈ 128,128,255）。
+ * 两个辅助通道隐藏线稿与文字标注，且与素模共用同一相机，保证几何边界对齐。
+ */
+function depthMaterial() {
+  if (state._depthMat) return state._depthMat;
+  const mat = new THREE.ShaderMaterial({
+    uniforms: { uNear: { value: 1 }, uFar: { value: 100000 } },
+    vertexShader: [
+      'varying float vViewZ;',
+      'void main() {',
+      '  vec4 mv = modelViewMatrix * vec4(position, 1.0);',
+      '  vViewZ = -mv.z;',
+      '  gl_Position = projectionMatrix * mv;',
+      '}',
+    ].join('\n'),
+    fragmentShader: [
+      'uniform float uNear;',
+      'uniform float uFar;',
+      'varying float vViewZ;',
+      'void main() {',
+      '  float t = clamp((vViewZ - uNear) / max(uFar - uNear, 1.0), 0.0, 1.0);',
+      '  gl_FragColor = vec4(vec3(1.0 - t), 1.0);',
+      '}',
+    ].join('\n'),
+  });
+  state._depthMat = mat;
+  return mat;
+}
+
+function normalMaterial() {
+  if (state._normalMat) return state._normalMat;
+  state._normalMat = new THREE.MeshNormalMaterial();
+  return state._normalMat;
+}
+
+/* 按当前相机到目标距离收紧深度映射区间（near/far 不影响像素位置，只影响深度分布） */
+function tuneDepthUniforms() {
+  const m = state._depthMat;
+  if (!m || !camera) return;
+  const dist = camera.position.distanceTo(controls.target);
+  const b = state.bounds;
+  const span = b
+    ? Math.max(b.x1 - b.x0, b.z1 - b.z0, b.y1 - b.y0)
+    : dist;
+  m.uniforms.uNear.value = Math.max(dist - span, 1);
+  m.uniforms.uFar.value = dist + span * 1.2;
+}
+
+function afterCameraMove() {
+  if (state.channel === 'depth') tuneDepthUniforms();
+}
+
+function setChannel(mode) {
+  if (['color', 'depth', 'normal'].indexOf(mode) < 0) mode = 'color';
+  state.channel = mode;
+  if (mode === 'depth') {
+    scene.overrideMaterial = depthMaterial();
+    tuneDepthUniforms();
+    scene.background = new THREE.Color(0x000000);
+  } else if (mode === 'normal') {
+    scene.overrideMaterial = normalMaterial();
+    scene.background = new THREE.Color(0x000000);
+  } else {
+    scene.overrideMaterial = null;
+    scene.background = state.baseBackground;
+    for (const ls of state.lineOverlays) ls.visible = state.linesOn;
+  }
+  const aux = mode !== 'color';
+  for (const ls of state.auxLines) {
+    ls.visible = aux ? false
+      : (state.lineOverlays.indexOf(ls) >= 0 ? state.linesOn : true);
+  }
+  for (const s of state.labels) s.visible = !aux && state.labelsOn;
+  const sel = document.getElementById('sel_channel');
+  if (sel) sel.value = mode;
+  if (renderer && scene && camera) renderer.render(scene, camera);
+}
+
+/* ---------------- 视图预设（由建筑包围盒推导，适配任意 JSON） ---------------- */
+const VIEW_NAMES = [
+  'iso-ne', 'iso-nw', 'iso-se', 'iso-sw',
+  'elev-s', 'elev-n', 'elev-w', 'elev-e',
+  'persp-1', 'persp-2',
+];
+/* 平面方位 → Three.js 方向：JSON 的 (X,Y) 映射到 (x,z)，南 = 计划 Y 小的一侧 */
+const ISO_DIRS = { 'iso-ne': [1, 1], 'iso-nw': [-1, 1], 'iso-se': [1, -1], 'iso-sw': [-1, -1] };
+
+function applyView(name) {
+  const b = state.bounds;
+  if (!b || !name || VIEW_NAMES.indexOf(name) < 0) return false;
+  const cx = (b.x0 + b.x1) / 2, cz = (b.z0 + b.z1) / 2;
+  const cy = (b.y0 + b.y1) / 2;
+  const sx = b.x1 - b.x0, sz = b.z1 - b.z0, sy = b.y1 - b.y0;
+  const diag = Math.sqrt(sx * sx + sz * sz + sy * sy);
+  const gradeY = state.levels ? state.levels.grade : b.y0;
+  let pos = null, target = [cx, cy, cz];
+  if (ISO_DIRS[name]) {
+    const d = ISO_DIRS[name];
+    const h = diag * 0.75;
+    pos = [cx + d[0] * h, b.y1 + diag * 0.6, cz + d[1] * h];
+  } else if (name.indexOf('elev-') === 0) {
+    const D = Math.max(sx, sz) * 1.5;
+    if (name === 'elev-s') pos = [cx, cy, b.z0 - D];
+    else if (name === 'elev-n') pos = [cx, cy, b.z1 + D];
+    else if (name === 'elev-w') pos = [b.x0 - D, cy, cz];
+    else pos = [b.x1 + D, cy, cz];
+  } else { /* persp-1 / persp-2：室外地坪 + 1700 视高 */
+    const eyeY = gradeY + 1700;
+    target = [cx, gradeY + 2800, cz];
+    if (name === 'persp-1') pos = [cx, eyeY, b.z0 - diag * 0.8];
+    else pos = [cx + diag * 0.57, eyeY, b.z0 - diag * 0.57];
+  }
+  camera.position.set(pos[0], pos[1], pos[2]);
+  controls.target.set(target[0], target[1], target[2]);
+  controls.update();
+  /* 人视视角模拟真实照片：裁掉室外地坪以下的基础 / 集水坑等地下构件
+   * （地面板就在 grade 高度，裁剪面下移 10mm 避免边界抖动） */
+  if (name.indexOf('persp-') === 0 && state.levels) {
+    renderer.clippingPlanes = [new THREE.Plane(new THREE.Vector3(0, 1, 0), -(gradeY - 10))];
+  } else {
+    renderer.clippingPlanes = [];
+  }
+  afterCameraMove();
+  renderer.render(scene, camera);
+  return true;
+}
+
+/* ---------------- 出图脚本接口（tools/cdp-shot.mjs 批量模式调用） ---------------- */
+window.WMShot = {
+  built: function () { return !!state.modelBuilt; },
+  views: function () { return VIEW_NAMES.slice(); },
+  view: applyView,
+  cam: function (px, py, pz, tx, ty, tz) {
+    renderer.clippingPlanes = [];
+    camera.position.set(px, py, pz);
+    controls.target.set(tx, ty, tz);
+    controls.update();
+    afterCameraMove();
+    renderer.render(scene, camera);
+    return true;
+  },
+  channel: setChannel,
+  info: function () {
+    return JSON.stringify({
+      channel: state.channel,
+      bounds: state.bounds,
+      camera: { pos: camera.position.toArray(), target: controls.target.toArray(), fov: camera.fov },
+    });
+  },
+};
+
+/* 建筑外轮廓 = 全部墙体 AABB 的并集；楼板 / 门窗朝向 / 地面 / 包围盒统一以它为准 */
+function wallBounds(walls) {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const w of walls) {
+    x0 = Math.min(x0, w.x0); y0 = Math.min(y0, w.y0);
+    x1 = Math.max(x1, w.x1); y1 = Math.max(y1, w.y1);
+  }
+  return { x0: x0, y0: y0, x1: x1, y1: y1 };
 }
 
 /* ---------------- 模型生成 ---------------- */
@@ -594,6 +883,7 @@ function buildModel(json, extras) {
     slabs: makeGroup('slabs'),
     columns: makeGroup('columns'),
     roof: makeGroup('roof'),
+    canopies: makeGroup('canopies'),
     stairs: makeGroup('stairs'),
     extra: makeGroup('extra'),
     ground: makeGroup('ground'),
@@ -605,6 +895,22 @@ function buildModel(json, extras) {
   for (const r of data.rooms) {
     r.floor = r.name.includes('水泵间') ? L.base : L.south;
   }
+
+  /* ---- 建筑外轮廓 + 南侧区块（楼面为 L.south 的房间并集）---- */
+  const wb = wallBounds(data.walls);
+  let sr = null;
+  for (const r of data.rooms) {
+    if (r.floor !== L.south) continue;
+    for (const p of r.pts) {
+      if (!sr) sr = { x0: p.x, y0: p.y, x1: p.x, y1: p.y };
+      else {
+        sr.x0 = Math.min(sr.x0, p.x); sr.y0 = Math.min(sr.y0, p.y);
+        sr.x1 = Math.max(sr.x1, p.x); sr.y1 = Math.max(sr.y1, p.y);
+      }
+    }
+  }
+  /* 南侧区块与水泵间的楼面分界线（南侧房间轮廓的外缘）；无南侧房间时不做该区块 */
+  const ySplit = sr ? sr.y1 : wb.y0;
 
   /* ---- 内墙起点高度：取相邻房间的最低楼面 ---- */
   function interiorWallZ0(wall) {
@@ -627,13 +933,12 @@ function buildModel(json, extras) {
 
   const openings = [];
   for (const d of data.doors) {
-    const z0 = floorAt(L, data.platform, d.cx, d.cy);
+    const z0 = floorAt(L, data.platform, ySplit, d.cx, d.cy);
     openings.push({ type: 'door', num: d.num, kind: d.kind, exterior: d.exterior,
                     cx: d.cx, cy: d.cy, w: d.w, h: d.h, z0: z0, z1: z0 + d.h });
   }
   for (const wnd of data.windows) {
-    const floor = floorAt(L, data.platform, wnd.cx, wnd.cy);
-    const z0 = floor + 900; /* 窗台高 900 */
+    const z0 = L.south + 900; /* 窗台统一以配电/控制间标高 +900 */
     openings.push({ type: 'win', num: wnd.num, kind: wnd.kind,
                     cx: wnd.cx, cy: wnd.cy, w: wnd.w, h: wnd.h, z0: z0, z1: z0 + wnd.h });
   }
@@ -652,8 +957,21 @@ function buildModel(json, extras) {
   }
 
   /* ---- 楼板 ---- */
-  addBox(G.slabs, 0, 0, 7200, 15100, L.base - 200, L.base, M.slab);
-  addBox(G.slabs, 0, 0, 7200, 4800, L.grade, L.south, M.slab);
+  /* 水泵间底板：整栋建筑外轮廓，厚 200 */
+  addBox(G.slabs, wb.x0, wb.y0, wb.x1, wb.y1, L.base - 200, L.base, M.slab);
+  /* 南侧区块室内填板：房间轮廓并集；靠建筑外缘的一侧在墙厚量级内兜到外墙面，避免墙下漏空 */
+  if (sr) {
+    const snap = 400;
+    const sx0 = (sr.x0 - wb.x0 <= snap) ? wb.x0 : sr.x0;
+    const sx1 = (wb.x1 - sr.x1 <= snap) ? wb.x1 : sr.x1;
+    const sy0 = (sr.y0 - wb.y0 <= snap) ? wb.y0 : sr.y0;
+    addBox(G.slabs, sx0, sy0, sx1, sr.y1, L.grade, L.south, M.slab);
+    log(`楼板：底板 ${fmt(wb.x0)}×${fmt(wb.y0)} - ${fmt(wb.x1)}×${fmt(wb.y1)}（厚 200）· ` +
+        `南侧填板 ${fmt(sx0)}×${fmt(sy0)} - ${fmt(sx1)}×${fmt(sr.y1)}（${fmt(L.south - L.grade)} 厚）· ` +
+        `分界 y=${fmt(ySplit)}`);
+  } else {
+    warn('未解析到南侧房间轮廓，跳过南侧室内填板');
+  }
   if (data.platform) {
     addBox(G.slabs, data.platform.x0, data.platform.y0, data.platform.x1, data.platform.y1,
            L.grade, L.south, M.slab);
@@ -688,9 +1006,6 @@ function buildModel(json, extras) {
         x1 = r.x1 + 500; y1 = r.y1 + 500;
       }
       addBox(G.roof, x0, y0, x1, y1, L.roof - 150, L.roof, M.roof);
-    }
-    for (const c of data.roofCanopies) {
-      addBox(G.roof, c.x0, c.y0, c.x1, c.y1, L.roof - 150, L.roof, M.roof);
     }
     for (const p of data.pipes) {
       addCylinder(G.roof, p.x, p.y, p.r, L.base, L.roof, M.roof, 10);
@@ -739,39 +1054,27 @@ function buildModel(json, extras) {
     addBox(G.extra, s.x0, s.y1 - 100, s.x1, s.y1, zB, L.base, M.slab);
     addBox(G.extra, s.x0, s.y0, s.x1, s.y1, zB, zB + 100, M.slab);
   }
-  for (const r of data.ramps) {
-    /* 由外墙处（门标高 2441）向外降到室外地坪（2141），板厚 100 */
-    const alongX = Math.abs(r.nx) > Math.abs(r.ny);
-    const topWall = L.south, topOuter = L.grade;
-    if (alongX) {
-      const x0 = r.nx > 0 ? r.x : r.x - r.l;
-      const x1 = x0 + r.l;
-      addSlopedBox(G.extra, x0, x1, r.y - r.w / 2, r.y + r.w / 2,
-                   topWall - 100, topOuter - 100, topWall, topOuter, M.ground, false);
-    } else {
-      const y0 = r.ny > 0 ? r.y : r.y - r.l;
-      const y1 = y0 + r.l;
-      addSlopedBox(G.extra, r.x - r.w / 2, r.x + r.w / 2, y0, y1,
-                   topWall - 100, topOuter - 100, topWall, topOuter, M.ground, true);
-    }
-  }
 
   /* ---- 地面 + 散水 ---- */
-  const terrain = (extras && extras.terrain) || null;
-  if (terrain && window.WMTerrain) {
-    const tn = window.WMTerrain.build(G.ground, terrain.objText, terrain.reg, L, M.ground);
-    log(`地面：三角网地形已载入（${tn} 个三角形）`);
-  } else {
-    /* 平面环地面（开洞避开下沉的水泵间北半部） */
-    addShapeRing(G.ground,
-      [{ x: -4000, y: -4000 }, { x: 12000, y: -4000 }, { x: 12000, y: 20000 }, { x: -4000, y: 20000 }],
-      [{ x: 0, y: 4800 }, { x: 7200, y: 4800 }, { x: 7200, y: 15100 }, { x: 0, y: 15100 }],
-      L.grade, M.ground);
-  }
-  if (data.apron) {
-    addShapeRing(G.ground, data.apron.outer, data.apron.inner, L.grade + 5, M.ground);
-    addLineLoop(G.ground, data.apron.outer, L.grade + 10);
-  }
+  const gx0 = wb.x0, gy0 = wb.y0, gx1 = wb.x1, gy1 = wb.y1;
+  const groundOffset = 5000;
+  const groundInner = [
+    { x: gx0, y: gy0 }, { x: gx1, y: gy0 },
+    { x: gx1, y: gy1 }, { x: gx0, y: gy1 },
+  ];
+  const groundOuter = [
+    { x: gx0 - groundOffset, y: gy0 - groundOffset }, { x: gx1 + groundOffset, y: gy0 - groundOffset },
+    { x: gx1 + groundOffset, y: gy1 + groundOffset }, { x: gx0 - groundOffset, y: gy1 + groundOffset },
+  ];
+  const groundThickness = 300;
+  const gz0 = L.grade - groundThickness, gz1 = L.grade;
+  addBox(G.ground, gx0 - groundOffset, gy0 - groundOffset, gx1 + groundOffset, gy0, gz0, gz1, M.ground);
+  addBox(G.ground, gx0 - groundOffset, gy1, gx1 + groundOffset, gy1 + groundOffset, gz0, gz1, M.ground);
+  addBox(G.ground, gx0 - groundOffset, gy0, gx0, gy1, gz0, gz1, M.ground);
+  addBox(G.ground, gx1, gy0, gx1 + groundOffset, gy1, gz0, gz1, M.ground);
+  addLineLoop(G.ground, groundOuter, L.grade + 10);
+  addLineLoop(G.ground, groundInner, L.grade + 10);
+  log(`地面/散水：内轮廓 ${fmt(gx0)}×${fmt(gy0)} - ${fmt(gx1)}×${fmt(gy1)}，外偏 ${fmt(groundOffset)} mm，厚 ${fmt(groundThickness)} mm`);
 
   /* ---- 房间轮廓 + 标注 ---- */
   const roomSeen = new Set();
@@ -798,7 +1101,7 @@ function buildModel(json, extras) {
 
   /* ---- 门窗族实例 ---- */
   if (window.WMFamilies && openings.length) {
-    const bcx = (0 + 7200) / 2, bcy = (0 + 15100) / 2;
+    const bcx = (wb.x0 + wb.x1) / 2, bcy = (wb.y0 + wb.y1) / 2;
     for (const op of openings) {
       const host = findHostWall(data.walls, op.cx, op.cy, op.w);
       if (!host) continue;
@@ -806,10 +1109,16 @@ function buildModel(json, extras) {
       const alongY = (host.y1 - host.y0) >= (host.x1 - host.x0);
       op.ax = alongY ? 0 : 1;
       op.ay = alongY ? 1 : 0;
-      const nx = alongY ? 1 : 0, ny = alongY ? 0 : 1;
-      const inward = (op.cx - bcx) * nx + (op.cy - bcy) * ny < 0;
-      op.nx = inward ? -nx : nx;
-      op.ny = inward ? -ny : ny;
+      /* 法线方向：根据洞口相对于建筑中心的位置确定朝向 */
+      if (alongY) {
+        /* 墙体沿 Y 方向，法线沿 X 方向 */
+        op.nx = op.cx < bcx ? -1 : 1;
+        op.ny = 0;
+      } else {
+        /* 墙体沿 X 方向，法线沿 Y 方向 */
+        op.nx = 0;
+        op.ny = op.cy < bcy ? -1 : 1;
+      }
       op.placed = true;
     }
     const placed = openings.filter(o => o.placed);
@@ -819,8 +1128,73 @@ function buildModel(json, extras) {
     log(`门窗族：${famRes.total} 组（门 ${placed.filter(o => o.type === 'door').length} · 窗 ${placed.filter(o => o.type === 'win').length}）`);
   }
 
+  /* ---- 雨篷：紧贴外墙，位于门洞上方，从墙面往外挑出 ---- */
+  const canopyProfile = extras && extras.canopyProfile ? extras.canopyProfile.profile : null;
+  const canopyDoors = openings.filter(op => op.type === 'door' && op.exterior && op.placed);
+  for (const door of canopyDoors) {
+    const canopyW = door.w + 400; /* 雨篷宽度 = 门洞宽度 + 两侧各 200mm */
+    const doorTopZ = door.z0 + door.h; /* 门洞顶部标高 */
+
+    /* 雨篷内边缘（紧贴墙面）位置：墙体外表面、门洞中心 */
+    const wallOuterX = door.cx + door.nx * door.tw / 2;
+    const wallOuterY = door.cy + door.ny * door.tw / 2;
+
+    if (canopyProfile) {
+      /* 放样路径与门洞顶部轮廓线共线：起点为放样长度居中于门洞中心的一端 */
+      const wx = -door.ny, wy = door.nx;
+      const startX = wallOuterX - wx * canopyW / 2;
+      const startY = wallOuterY - wy * canopyW / 2;
+      /* 使用截面（黄色轮廓线）挤出形成实体雨篷，截面 u=0 紧贴墙面，u>0 向外挑出 */
+      addExtrudedCanopy(G.canopies, canopyProfile, startX, startY, canopyW, door.nx, door.ny, doorTopZ, M.roof);
+    } else {
+      /* 回退：无截面数据时用简单斜板 */
+      const canopyD = 700;
+      const slopeDrop = 50;
+      if (Math.abs(door.nx) > Math.abs(door.ny)) {
+        const x0 = wallOuterX, x1 = wallOuterX + door.nx * canopyD;
+        const y0 = door.cy - canopyW / 2, y1 = door.cy + canopyW / 2;
+        addSlopedBox(G.canopies, x0, x1, y0, y1, doorTopZ, doorTopZ - slopeDrop, doorTopZ, doorTopZ - slopeDrop, M.roof, false);
+      } else {
+        const x0 = door.cx - canopyW / 2, x1 = door.cx + canopyW / 2;
+        const y0 = wallOuterY, y1 = wallOuterY + door.ny * canopyD;
+        addSlopedBox(G.canopies, x0, x1, y0, y1, doorTopZ, doorTopZ, doorTopZ - slopeDrop, doorTopZ - slopeDrop, M.roof, true);
+      }
+    }
+  }
+  log(`雨篷：${canopyDoors.length} 组`);
+
+  /* ---- 坡道：紧贴外门，居中于门洞，截面为直角三角形（长直角边贴地） ---- */
+  const rampDoors = openings.filter(op => op.type === 'door' && op.exterior && op.placed);
+  for (const door of rampDoors) {
+    const rampW = door.w + 200;
+    const rampL = 1500;
+    if (Math.abs(door.nx) > Math.abs(door.ny)) {
+      const wallX = door.cx + door.nx * door.tw / 2;
+      addRampWedge(G.extra, wallX, door.nx > 0 ? 1 : -1, rampL, door.cy, rampW,
+                   L.grade, L.south, M.ground, false);
+    } else {
+      const wallY = door.cy + door.ny * door.tw / 2;
+      addRampWedge(G.extra, wallY, door.ny > 0 ? 1 : -1, rampL, door.cx, rampW,
+                   L.grade, L.south, M.ground, true);
+    }
+  }
+
   /* ---- 线稿叠加通道 ---- */
   buildEdgeLines();
+
+  /* ---- 建筑包围盒与标高表（供视图预设 / 出图脚本使用） ---- */
+  let bx0 = wb.x0, by0 = wb.y0, bx1 = wb.x1, by1 = wb.y1;
+  for (const r of [data.roofOuter, data.roofEaves]) {
+    if (!r) continue;
+    bx0 = Math.min(bx0, r.x0); by0 = Math.min(by0, r.y0);
+    bx1 = Math.max(bx1, r.x1); by1 = Math.max(by1, r.y1);
+  }
+  state.levels = L;
+  state.bounds = {
+    x0: bx0, x1: bx1, z0: by0, z1: by1,
+    y0: data.sump ? Math.min(L.sump, L.base - 200) : L.base - 200,
+    y1: L.roof,
+  };
 
   /* ---- 统计 ---- */
   log(`墙体 ${data.walls.length} 面（含开洞）`);
@@ -888,20 +1262,35 @@ function bindUI() {
       if (el && el.textContent.trim()) return el.textContent;
       return null;
     };
-    const [eavesProfile, terrainReg, terrainObj] = await Promise.all([
+    const [eavesProfile, canopyProfile, terrainReg, terrainObj] = await Promise.all([
       readJSON('eavesProfileData', 'data/eaves-profile.json'),
+      readJSON('canopyProfileData', 'data/canopy-profile.json'),
       readJSON('terrainRegData', 'data/terrain-registration.json'),
       readText('terrainObjData', 'data/terrain.obj'),
     ]);
     const terrain = (terrainReg && terrainObj) ? { reg: terrainReg, objText: terrainObj } : null;
-    return { eavesProfile, terrain };
+    return { eavesProfile, canopyProfile, terrain };
   }
 
   function applyUrlParams() {
     const p = new URLSearchParams(location.search);
     if (p.get('lines') === '1') setLinesVisible(true);
+    if (p.get('annot') === '0') {
+      const g = state.groups.annot;
+      if (g) g.visible = false;
+      setLabelsVisible(false);
+      const el = document.getElementById('chk_annot');
+      if (el) el.checked = false;
+    }
     const bg = p.get('bg');
-    if (bg && /^[0-9a-fA-F]{6}$/.test(bg)) scene.background = new THREE.Color('#' + bg);
+    if (bg && /^[0-9a-fA-F]{6}$/.test(bg)) {
+      state.baseBackground = new THREE.Color('#' + bg);
+      scene.background = state.baseBackground;
+    }
+    const view = p.get('view');
+    if (view) applyView(view);
+    const ch = p.get('channel');
+    if (ch) setChannel(ch);
   }
 
   async function build(json) {
@@ -954,7 +1343,7 @@ function bindUI() {
 
   const chkMap = {
     chk_walls: 'walls', chk_slabs: 'slabs', chk_columns: 'columns',
-    chk_roof: 'roof', chk_stairs: 'stairs', chk_extra: 'extra',
+    chk_roof: 'roof', chk_canopies: 'canopies', chk_stairs: 'stairs', chk_extra: 'extra',
     chk_ground: 'ground', chk_families: 'families', chk_annot: 'annot',
   };
   for (const id in chkMap) {
@@ -962,12 +1351,40 @@ function bindUI() {
     el.addEventListener('change', () => {
       const g = state.groups[chkMap[id]];
       if (g) g.visible = el.checked;
-      for (const s of state.labels) s.visible = document.getElementById('chk_annot').checked;
+      if (chkMap[id] === 'annot') setLabelsVisible(el.checked);
     });
   }
   const chkLines = document.getElementById('chk_lines');
   if (chkLines) {
     chkLines.addEventListener('change', () => setLinesVisible(chkLines.checked));
+  }
+
+  /* 全选 / 取消全选 */
+  const btnSelectAll = document.getElementById('btn_select_all');
+  const btnDeselectAll = document.getElementById('btn_deselect_all');
+  if (btnSelectAll) {
+    btnSelectAll.addEventListener('click', () => {
+      for (const id in chkMap) {
+        const el = document.getElementById(id);
+        if (el) { el.checked = true; const g = state.groups[chkMap[id]]; if (g) g.visible = true; }
+      }
+      if (chkLines) { chkLines.checked = true; setLinesVisible(true); }
+      setLabelsVisible(true);
+    });
+  }
+  if (btnDeselectAll) {
+    btnDeselectAll.addEventListener('click', () => {
+      for (const id in chkMap) {
+        const el = document.getElementById(id);
+        if (el) { el.checked = false; const g = state.groups[chkMap[id]]; if (g) g.visible = false; }
+      }
+      if (chkLines) { chkLines.checked = false; setLinesVisible(false); }
+      setLabelsVisible(false);
+    });
+  }
+  const selChannel = document.getElementById('sel_channel');
+  if (selChannel) {
+    selChannel.addEventListener('change', () => setChannel(selChannel.value));
   }
 
   /* 默认尝试加载示例 JSON */
