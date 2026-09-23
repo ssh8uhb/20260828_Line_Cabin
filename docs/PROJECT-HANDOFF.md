@@ -35,7 +35,7 @@ Blender 或其他建模软件**。
 | 场景面板 | renderScenePanel() / applyScene() | 左侧面板「场景（视角镜头）」：8 个固定场景（4 正立面 + 4 角部鸟瞰，即上行 8 个预设）+ 自定义镜头（存相机位置/目标点/裁剪状态）；按 `DrawingName` 分别写入 localStorage（键 `wm.scenes.v1:<DrawingName>`），不可用时退化为会话内存 |
 | 出图通道 | setChannel() / depthMaterial() | color 素模 / depth 线性深度（近白远黑，自定义 ShaderMaterial）/ normal 视空间法线（MeshNormalMaterial）；同一相机逐像素对齐，辅助通道自动隐藏线稿与标注 |
 | 批量出图接口 | window.WMShot + tools/cdp-shot.mjs | 页面暴露 built/views/view/cam/channel/info/scenes/saveScene/applyScene/familyCheck；脚本批量模式循环 视角 × 通道 截图并写 manifest.json（相机参数） |
-| 门窗参数化族 | js/families.js | 6 个通用族，按 Kind 与宽度自动匹配，按洞口尺寸缩放、按墙向/法线定向 |
+| 门窗参数化族 | js/families.js | 6 个通用族，按 Kind 与宽度自动匹配，按洞口尺寸缩放、按墙向/法线定向；族内几何统一用洞口局部坐标 u/v/n（正 n 指向室内），`WMShot.familyCheck()` 逐块校核「构件不许凸出墙面」（样例基线 78 块 / 0 越界） |
 | 挑檐截面放样 | js/eaves.js + tools/dxf-profile.mjs | 截面沿屋面外轮廓矩形放样，角部按偏移处理；DXF 截面提取工具已就绪 |
 | 地形导入 | js/terrain.js | OBJ 三角网 + 双控制点相似变换（平移/旋转/等比缩放）+ 高程换算 |
 | 出图模式 | applyUrlParams() + STATIC | ?static=1 渲染数帧后停住；?lines=1 带线稿；?annot=0 去标注；?view= 视角预设；?channel= 出图通道；?bg=RRGGBB 设背景 |
