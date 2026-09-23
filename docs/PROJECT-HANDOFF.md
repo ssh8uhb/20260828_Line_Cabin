@@ -1,6 +1,6 @@
 # 项目交接说明 — 线条小屋 / 建筑白模（20260828_Line_Cabin）
 
-> 交接版本：v0.2.0（tag v0.2.0，commit 5867b3a）　最后更新：2026-09-21
+> 交接版本：v0.3.0（tag 待打）　最后更新：2026-09-21
 > 面向对象：接手的 AI Agent（Codex / Cursor 等）与项目负责人。
 > 仓库工作约定见根目录 AGENTS.md；下一步任务见 docs/ROADMAP.md；数据映射见 docs/DATA-MODEL.md。
 
@@ -14,14 +14,14 @@ Blender 或其他建模软件**。
 | 段 | 做什么 | 由谁完成 | 现状 |
 | --- | --- | --- | --- |
 | ① DWG → JSON | 用 CAD 端设计插件从图纸导出 PlanFundingDrawing JSON | 用户侧的 CAD 插件（已有，可解释、可复现） | 已具备 |
-| ② JSON → 白模 | 在浏览器端用 Three.js 参数化建模，可交互浏览、可截图 | **本项目** | **v0.2.0 可运行** |
+| ② JSON → 白模 | 在浏览器端用 Three.js 参数化建模，可交互浏览、可截图 | **本项目** | **v0.3.0 可运行** |
 | ③ 白模截图 + 提示词 → 效果图 | 扩散模型（外立面材质、风格提示词）渲染 | 本项目后续 | 未开始 |
 | ④ 产品化 | 打包成 .exe 桌面端（Electron 方案） | 本项目后续 | 未开始 |
 
 第 1 段的前提是：JSON 由设计插件导出，字段有明确的业务含义（可解释、合理），只是缺少文档说明。
 因此遇到不确定字段时，**优先去问用户或对照 Flie/输入文件/PlanFundingDrawing_JSON说明.md，不要凭字段名猜**。
 
-## 2. 当前实现（v0.2.0）
+## 2. 当前实现（v0.3.0）
 
 主交付物是 white-model-viewer/，一个不依赖任何构建工具、可双击打开的单页应用。
 
@@ -30,11 +30,14 @@ Blender 或其他建模软件**。
 | JSON 解析与坐标对齐 | js/white-model.js 的 parseDrawing() | 遍历 ViewFrames，按轴线 1 ∩ A 把三个图框对齐到同一坐标系，重复图元去重 |
 | 标高体系 | buildLevels() | 由 PlanElevationAnnotationObject 的 Kind 索引生成层高表，Z=0 = 水泵间地面 |
 | 参数化建模 | buildModel() | 墙体（含门窗洞口拆板）、楼板、结构柱、屋面、楼梯/钢梯/爬梯、基础/集水坑/坡道、散水、房间标注 |
-| 素模 + 线稿双通道 | buildEdgeLines() / setLinesVisible() | 对实体按 30° 二面角阈值提取黑色棱边；默认隐藏，可切换 |
+| 素模 + 线稿双通道 | buildEdgeLines() / setLinesVisible() | 对实体按 30° 二面角阈值提取黑色棱边；覆盖 walls/slabs/columns/roof/canopies/stairs/extra/families 八个分组（新增实体分组时需同步该名单）；默认隐藏，可切换 |
+| 视角预设（10 个） | applyView() | iso-ne/nw/se/sw 鸟瞰、elev-s/n/w/e 立面、persp-1/2 人视（地坪 + 1700 视高，裁掉地坪以下构件）；由建筑包围盒自动推算，适配任意 JSON |
+| 出图通道 | setChannel() / depthMaterial() | color 素模 / depth 线性深度（近白远黑，自定义 ShaderMaterial）/ normal 视空间法线（MeshNormalMaterial）；同一相机逐像素对齐，辅助通道自动隐藏线稿与标注 |
+| 批量出图接口 | window.WMShot + tools/cdp-shot.mjs | 页面暴露 built/views/view/cam/channel/info；脚本批量模式循环 视角 × 通道 截图并写 manifest.json（相机参数） |
 | 门窗参数化族 | js/families.js | 6 个通用族，按 Kind 与宽度自动匹配，按洞口尺寸缩放、按墙向/法线定向 |
 | 挑檐截面放样 | js/eaves.js + tools/dxf-profile.mjs | 截面沿屋面外轮廓矩形放样，角部按偏移处理；DXF 截面提取工具已就绪 |
 | 地形导入 | js/terrain.js | OBJ 三角网 + 双控制点相似变换（平移/旋转/等比缩放）+ 高程换算 |
-| 出图模式 | applyUrlParams() + STATIC | ?static=1 渲染数帧后停住；?lines=1 带线稿；?bg=RRGGBB 设背景 |
+| 出图模式 | applyUrlParams() + STATIC | ?static=1 渲染数帧后停住；?lines=1 带线稿；?annot=0 去标注；?view= 视角预设；?channel= 出图通道；?bg=RRGGBB 设背景 |
 | 离线可用 | index.html 内嵌 #sampleData / #eavesProfileData | 双击 file:// 打开即可看到示例白模 |
 
 占位数据说明：门窗族是通用占位几何、挑檐是 500×150 平板占位截面、地面是平面（未接入真实地形网格）。
@@ -52,7 +55,7 @@ Blender 或其他建模软件**。
           → buildLevels(data)    // 标高体系 L
           → 各构件建模，写入 9 个分组: walls/slabs/columns/roof/stairs/extra/ground/families/annot
           → buildEdgeLines()     // 线稿叠加通道（默认隐藏）
-      → applyUrlParams(): 应用 ?lines=1 / ?bg=RRGGBB
+      → applyUrlParams(): 应用 ?lines=1 / ?annot=0 / ?view= / ?channel= / ?bg=RRGGBB
   → 用户可拖入其它 JSON 文件重新构建
 ```
 
@@ -68,11 +71,17 @@ Blender 或其他建模软件**。
 python -m http.server 8123 --directory D:/Work/Project/20260828_Line_Cabin
 # → http://localhost:8123/white-model-viewer/
 
-# 无头截图（需本机 Chrome/Edge + Node 22+）
+# 无头截图（单视角，需本机 Chrome/Edge + Node 22+）
 node white-model-viewer/tools/cdp-shot.mjs "http://localhost:8123/white-model-viewer/?static=1&lines=1" out.png 8
+
+# 批量出图：10 视角 × 3 通道（color/depth/normal），输出 PNG + manifest.json
+node white-model-viewer/tools/cdp-shot.mjs "http://localhost:8123/white-model-viewer/?annot=0" outdir --views=all --channels=color,depth,normal
 ```
 
-URL 参数：?static=1 固定视角出图（渲染 8 帧后停止）；?lines=1 叠加黑色线稿；?bg=ffffff 背景色（6 位 hex）。
+URL 参数：?static=1 固定视角出图（渲染 8 帧后停止）；?lines=1 叠加黑色线稿；?annot=0 隐藏房间标注；
+?view=iso-ne 等切换 10 个视角预设（iso-ne/nw/se/sw、elev-s/n/w/e、persp-1/2）；?channel=color/depth/normal
+切换出图通道；?bg=ffffff 背景色（6 位 hex）。人视视角（persp-*）自动用地坪裁剪面隐藏室外地坪以下的
+基础/集水坑；批量模式下 window.WMShot 驱动 live 页面，manifest.json 记录每张图的相机参数便于跨版本比对。
 
 ### 关于线稿通道与 AI 出图
 
@@ -116,7 +125,7 @@ Lineart/Canny 条件时，清晰的棱边线能显著提高“几何不走形”
 | 内墙起始标高 | 自 +2441 起（按所在房间楼面） | white-model.js interiorWallZ0() | 内墙高度 |
 | 楼梯踏步高 | 250 mm（踏步宽按 JSON 梯段长等分） | white-model.js 楼梯段 | 楼梯形态 |
 | 平屋面 | 不做找坡（屋面为平板 + 挑檐放样） | white-model.js 屋面段 | 屋面造型 |
-| 楼板厚度 | 200 mm；屋面板厚 150 mm | white-model.js 楼板/屋面段 | 剖面厚度 |
+| 楼板厚度 | 水泵间底板 200 mm；南侧室内填板 = `L.south − L.grade`（当前 300 mm）；屋面板 150 mm；平面范围按墙体 AABB / 房间轮廓推导 | white-model.js 楼板/屋面段 | 剖面厚度 |
 | 挑檐放样路径 | 屋面外轮廓矩形（RoofPolylineObject Kind=0），截面自外墙面向外放样 | white-model.js 屋面段 + js/eaves.js | 挑檐形状 |
 | 门窗族几何 | 6 个通用族（框 70 / 门扇厚 45 / 玻璃厚 8） | js/families.js | 门窗细节 |
 
@@ -124,7 +133,8 @@ Lineart/Canny 条件时，清晰的棱边线能显著提高“几何不走形”
 
 - **门窗是占位几何**：只按洞口宽高缩放通用族，没有真实门窗分格、开启扇位置，需要 2D CAD 大样替换。
 - **挑檐是占位截面**：500×150 平板，真实放样截面（DXF）到位后替换。
-- **地面是平面**：散水按 ApronObject 生成环带；真实带高程三角网（OBJ）未接入，导入管线已就绪。
+- **地面/散水为几何近似**：按建筑外墙 AABB 外偏 5 m 生成 300 mm 厚回字形实体，不使用 ApronObject 轮廓；
+  真实带高程三角网（OBJ）导入管线已就绪，但当前样例未启用。
 - **墙体按轴对齐矩形（AABB）处理**：由 Outline 的 min/max 得到矩形，**不支持斜墙/异形墙**；若后续样本出现斜墙，需要改成多边形与定向开洞。
 - **不做布尔运算**：墙体开洞用“沿墙区间 + 高度区间”的参数化拆板实现，避免依赖 CSG 库；
   洞口若跨越多个墙段或与墙端过近，可能出现拆板边界不理想。
@@ -150,6 +160,7 @@ Lineart/Canny 条件时，清晰的棱边线能显著提高“几何不走形”
 | v0.1.0 | e6c8857 | 白模查看器首版：JSON → Three.js 参数化白模、离线双击可用、CDP 截图脚本 |
 | — | 6d1b253 | 上传输入文件（JSON / JSON 说明 / DWG / DXF / 解析结果） |
 | v0.2.0 | 5867b3a | 线稿通道、门窗参数化族、挑檐截面放样 + DXF 提取工具、地形导入 |
+| v0.3.0 | （待提交） | 多视角预设（10）+ depth/normal 出图通道 + 批量出图（WMShot / cdp-shot 批量模式）+ 人视地坪裁剪 + ?annot=0 |
 
 提交信息格式：`<type>: <中文说明>`；里程碑同时打 tag 并推送。
 
@@ -163,4 +174,4 @@ Lineart/Canny 条件时，清晰的棱边线能显著提高“几何不走形”
 
 ## 11. 下一步
 
-见 docs/ROADMAP.md：素材替换三件套 → 多视角出图 → JSON→白模批处理 → ~扩散模型联调 → Electron 打包 .exe。
+见 docs/ROADMAP.md：素材替换三件套 → JSON→白模批处理补齐（?src= 任意路径加载）→ 扩散模型联调 → Electron 打包 .exe。

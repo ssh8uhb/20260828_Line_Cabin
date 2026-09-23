@@ -21,6 +21,7 @@
   - 墙体、楼板、结构柱、屋面、楼梯、基础/集水坑/坡道、地面、房间标注
   - **线稿叠加（黑线通道）**：对主要构件按二面角阈值(30°)提取棱边黑线，素模/线稿一键切换
   - **门窗构件**：框/扇/玻璃等参数化族实例（当前为通用占位族，CAD 大样到位后替换）
+  - **出图通道**：素模（彩色）/ 深度 depth / 法线 normal，供 AI 渲染条件图使用（见下文）
 
 ## 已实现的建模逻辑（对应 JSON 图元）
 
@@ -79,9 +80,49 @@ python -m http.server 8123
 node tools/cdp-shot.mjs "http://localhost:8123/white-model-viewer/?static=1" out.png 8
 ```
 
-`?static=1` 渲染数帧后停止，便于稳定截图；参数：
-- `lines=1`：出图含黑色线稿叠加
-- `bg=ffffff`：背景色（hex）
+`?static=1` 渲染数帧后停止，便于稳定截图；URL 参数：
+
+| 参数 | 作用 |
+| --- | --- |
+| `lines=1` | 出图含黑色线稿叠加 |
+| `annot=0` | 隐藏房间标注（文字 + 房间轮廓线），得到纯净条件图 |
+| `bg=ffffff` | 背景色（6 位 hex） |
+| `view=名字` | 应用视角预设（见下表），如 `?view=iso-ne` |
+| `channel=…` | 出图通道 `color` / `depth` / `normal`，如 `?channel=depth` |
+
+### 视角预设（10 个，按建筑包围盒自动推算，适配任意 JSON）
+
+| 名称 | 内容 |
+| --- | --- |
+| `iso-ne / iso-nw / iso-se / iso-sw` | 四角鸟瞰 |
+| `elev-s / elev-n / elev-w / elev-e` | 南 / 北 / 西 / 东立面（正视） |
+| `persp-1 / persp-2` | 人视（室外地坪 + 1700mm 视高；自动裁掉地坪以下的基础/集水坑，画面如真实照片） |
+
+### 出图通道
+
+| 通道 | 说明 |
+| --- | --- |
+| `color`（素模） | 白模渲染；配合 `lines=1` 可加黑色棱边线稿 |
+| `depth` | 线性深度：近白远黑、纯黑背景（ControlNet Depth 友好） |
+| `normal` | 视空间法线：朝向面的 RGB ≈ (128,128,255)（ControlNet Normal 规范） |
+
+depth / normal 通道自动隐藏线稿与标注，与素模同一相机渲染，逐像素对齐。
+
+### 批量出图（一次产出多视角 × 多通道）
+
+输出路径是目录（或加 `--` 开头参数）时进入批量模式，驱动页面内 `window.WMShot` 接口循环截图：
+
+```bash
+# 全部 10 视角 × 3 通道 = 30 张 + manifest.json
+node tools/cdp-shot.mjs "http://localhost:8123/white-model-viewer/?annot=0" 输出目录 --views=all --channels=color,depth,normal
+
+# 只出指定视角 / 通道
+node tools/cdp-shot.mjs "http://localhost:8123/white-model-viewer/" 输出目录 --views=iso-ne,elev-s --channels=color,depth
+```
+
+输出文件命名 `视角-通道.png`（如 `iso-ne-depth.png`）；同时写 `manifest.json`，记录每个视角的
+相机 pos / target / fov 与建筑包围盒，保证不同版本之间的出图可以逐像素比对。
+`--views=` 逗号分隔或 `all`；`--channels=` 逗号分隔；末尾数字是页面加载等待秒数（默认 8）。
 
 ## 文件结构
 

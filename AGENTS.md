@@ -17,8 +17,8 @@
    页面内嵌一份占位数据**，否则离线打开会失效。
 3. **单位统一 mm**；Z=0 = 水泵间地面（绝对标高 166759）。建筑坐标由三个图框按轴线 1 ∩ A 对齐。
 4. 不提交第三方参考仓库副本（pure-line-room/ 已在 .gitignore 排除），不提交仓库根目录的无关文件。
-5. 改墙/门窗/挑檐/地面建模逻辑时，**必须同步更新 docs/DATA-MODEL.md**；改素材规格时同步更新
-   docs/ROADMAP.md 与 white-model-viewer/README.md。
+5. 改任何一个构件的建模逻辑或默认数值时，**必须同步更新 docs/DATA-MODEL.md 的第 5 节默认值总表**；
+   改素材规格时同步更新 docs/ROADMAP.md 与 white-model-viewer/README.md。
 
 ## 目录速览
 
@@ -47,7 +47,10 @@ node --check js/eaves.js; node --check js/terrain.js
 # 2) 渲染截图（需本机有 Chrome/Edge；输出到临时目录，不要提交进仓库）
 node tools/cdp-shot.mjs "file:///D:/Work/Project/20260828_Line_Cabin/white-model-viewer/index.html?static=1&lines=1" "$env:TEMP/wm-check.png" 8
 
-# 3) 或起本地静态服务
+# 3) 批量出图自检（10 视角 × 3 通道，输出目录 + manifest.json，同样不进仓库）
+node tools/cdp-shot.mjs "file:///D:/Work/Project/20260828_Line_Cabin/white-model-viewer/index.html?annot=0" "$env:TEMP/wm-batch" --views=all --channels=color,depth,normal
+
+# 4) 或起本地静态服务
 python -m http.server 8123 --directory D:/Work/Project/20260828_Line_Cabin
 #    → http://localhost:8123/white-model-viewer/
 ```
@@ -82,5 +85,6 @@ node C:/Users/lenovo/.codex/skills/claude-vision-skill/vision.js "$env:TEMP/wm-c
 
 - docs/PROJECT-HANDOFF.md — 项目目标、当前实现、图纸事实、假设清单、限制与风险
 - docs/ROADMAP.md — 下一步任务、素材交付规格与验收标准
-- docs/DATA-MODEL.md — PlanFundingDrawing JSON → 白模的映射与坐标/标高等约定
+- docs/DATA-MODEL.md — PlanFundingDrawing JSON → 白模的生成说明：参数读取规则、图元映射、
+  默认形状与默认数值总表（含硬编码清单）、坐标与标高等约定
 - docs/SESSION-NOTES-2026-08-28.md — 需求演变与关键决策纪要

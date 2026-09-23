@@ -1,6 +1,6 @@
 # 路线图 — 下一步任务
 
-> 更新于 v0.2.0。完成任务后请同步更新本文件状态、white-model-viewer/README.md，必要时更新 docs/DATA-MODEL.md。
+> 更新于 v0.3.0。完成任务后请同步更新本文件状态、white-model-viewer/README.md，必要时更新 docs/DATA-MODEL.md。
 
 ## 0. 优先级总览
 
@@ -9,9 +9,9 @@
 | 1.1 | 挑檐真实截面放样 | 用户：截面 DXF + 对齐说明 | 管线已就绪，等素材 |
 | 1.2 | 门窗族替换为真实大样 | 用户：各类门窗 DXF 大样 | 管线已就绪，等素材 |
 | 1.3 | 真实地形地面 | 用户：三角网 OBJ + 控制点对 | 管线已就绪，等素材 |
-| 2.1 | 多视角自动截图导出 | 无 | 未开始 |
-| 2.2 | depth / normal 通道导出 | 无 | 未开始（当前只留了开关位） |
-| 3.1 | JSON → 白模批量出图（无界面） | 2.1 | 未开始 |
+| 2.1 | 多视角自动截图导出 | 无 | **已完成（v0.3.0）** |
+| 2.2 | depth / normal 通道导出 | 无 | **已完成（v0.3.0）** |
+| 3.1 | JSON → 白模批量出图（无界面） | 2.1 | 批量框架已就绪，剩任意 JSON 路径加载（?src=）与失败报错 |
 | 3.2 | 扩散模型联调（截图 + 提示词 → 效果图） | 2.x、3.1 | 未开始 |
 | 3.3 | Electron 打包 .exe | 3.1、3.2 | 未开始 |
 | 4.1 | 第二个样本回归验证 | 用户：其它项目的 JSON | 未开始 |
@@ -65,18 +65,24 @@
 
 ## 2. 出图能力增强
 
-### 2.1 多视角自动截图导出
+### 2.1 多视角自动截图导出 — ✅ v0.3.0 已完成
 
-- **目标**：一次运行导出多个视角（四角鸟瞰 + 4 个立面 + 若干人视），供扩散模型挑选。
-- **做法**：给 cdp-shot.mjs 增加批量模式或在页面增加 `?cam=x,y,z,tx,ty,tz` 参数，配 CDP 的 Page.captureScreenshot 循环。
-- **验收标准**：一条命令输出 N 张 PNG，命名含视角标识；同一视角在不同版本间可比对。
+- **实现**：js/white-model.js 内置 10 个视角预设（由建筑包围盒自动推算，适配任意 JSON）：
+  `iso-ne / iso-nw / iso-se / iso-sw`（四角鸟瞰）、`elev-s / elev-n / elev-w / elev-e`（四向立面）、
+  `persp-1 / persp-2`（室外地坪 + 1700mm 视高的人视，带地坪裁剪：地坪以下基础/集水坑不出现）。
+  单视角可用 `?view=iso-ne` 直接出图；批量用 tools/cdp-shot.mjs 批量模式（驱动页面内 window.WMShot API）。
+- **用法**：`node tools/cdp-shot.mjs "…/index.html" 输出目录 --views=all --channels=color`
+  （`--views=` 逗号分隔或 all；`--channels=` 逗号分隔）。输出 `视角-通道.png` + `manifest.json`
+  （记录每视角相机 pos/target/fov 与包围盒，保证跨版本可比对）。
+- **验收**：一条命令产出 10 × 通道数 张 PNG，命名含视角标识 ✅；manifest 记录相机参数 ✅。
 
-### 2.2 depth / normal 通道导出（预留给扩散模型条件）
+### 2.2 depth / normal 通道导出 — ✅ v0.3.0 已完成
 
-- **目标**：为 ControlNet（Depth / Normal / Lineart）提供条件图，提高几何一致性。
-- **做法**：换用 depth/normal 材质重渲染一遍，或用 Three.js 的 MeshDepthMaterial / MeshNormalMaterial 出图；
-  当前代码已预留开关位（只做了 lines / bg），需要新增参数与材质分支。
-- **验收标准**：输出图的几何边界与素模严格对齐（同相机参数）；depth 通道背景可被模型正确忽略。
+- **实现**：页面内"出图通道"下拉（素模 / 深度 / 法线）或 `?channel=depth|normal`。
+  depth 用自定义线性深度 ShaderMaterial（近白远黑、纯黑背景，比 MeshDepthMaterial 的非线性屏幕深度
+  更适合 ControlNet Depth）；normal 用 MeshNormalMaterial（视空间法线，朝向面的 RGB ≈ 128,128,255）。
+  两通道下线稿/标注自动隐藏，同一相机渲染，几何边界与素模严格对齐。
+- **验收**：输出图与素模同机位逐像素对齐 ✅；depth 背景纯黑 ✅。
 
 ## 3. 流水线产品化
 
