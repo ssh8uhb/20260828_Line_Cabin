@@ -28,6 +28,7 @@ const state = {
   linesOn: false,      // 线稿开关状态
   labelsOn: true,      // 文字标注开关状态
   baseBackground: null,
+  drawingName: '',     // 当前图纸名（场景按它分别持久化）
 };
 
 function log(msg) { state.log.push(msg); }
@@ -853,6 +854,15 @@ window.WMShot = {
     return true;
   },
   channel: setChannel,
+  scenes: function () {
+    return JSON.stringify({
+      key: sceneKey(),
+      fixed: FIXED_SCENES.map(s => s[0]),
+      custom: readScenes(),
+    });
+  },
+  saveScene: function (name) { captureScene(name); renderScenePanel(); return true; },
+  applyScene: applyScene,
   info: function () {
     return JSON.stringify({
       channel: state.channel,
@@ -861,6 +871,122 @@ window.WMShot = {
     });
   },
 };
+
+/* ---------------- 场景（固定视角 + 自定义镜头；按图纸名分别持久化） ---------------- */
+/* 固定 8 个：4 个正立面 + 4 个角部向下鸟瞰（由建筑包围盒推算，见 applyView） */
+const FIXED_SCENES = [
+  ['elev-s', '南立面'], ['elev-n', '北立面'],
+  ['elev-w', '西立面'], ['elev-e', '东立面'],
+  ['iso-ne', '东北鸟瞰'], ['iso-nw', '西北鸟瞰'],
+  ['iso-se', '东南鸟瞰'], ['iso-sw', '西南鸟瞰'],
+];
+const SCENE_STORE_PREFIX = 'wm.scenes.v1:';
+const sceneCache = {};    // localStorage 不可用时的会话内退路
+let sceneStoreOK = null;
+
+function scenesAvailable() {
+  if (sceneStoreOK === null) {
+    try {
+      localStorage.setItem('wm.probe', '1');
+      localStorage.removeItem('wm.probe');
+      sceneStoreOK = true;
+    } catch (e) { sceneStoreOK = false; }
+  }
+  return sceneStoreOK;
+}
+function sceneKey() { return SCENE_STORE_PREFIX + (state.drawingName || '未命名图纸'); }
+function readScenes() {
+  const k = sceneKey();
+  if (sceneCache[k]) return sceneCache[k].slice();
+  if (scenesAvailable()) {
+    try {
+      const raw = localStorage.getItem(k);
+      if (raw) { const a = JSON.parse(raw); if (Array.isArray(a)) return a; }
+    } catch (e) {}
+  }
+  return [];
+}
+function writeScenes(arr) {
+  const k = sceneKey();
+  sceneCache[k] = arr.slice();
+  if (scenesAvailable()) {
+    try { localStorage.setItem(k, JSON.stringify(arr)); } catch (e) {}
+  }
+}
+/* 记录当前镜头：位置 + 目标点 + 是否裁剪地坪以下（人视视角的裁剪面按当前标高重算） */
+function captureScene(name) {
+  const arr = readScenes();
+  arr.push({
+    name: String(name || ('场景 ' + (arr.length + 1))),
+    pos: camera.position.toArray().map(v => Math.round(v)),
+    target: controls.target.toArray().map(v => Math.round(v)),
+    clip: renderer.clippingPlanes.length > 0,
+  });
+  writeScenes(arr);
+  return arr;
+}
+function applyScene(scn) {
+  if (!scn || !scn.pos || !scn.target) return false;
+  const g = state.levels ? state.levels.grade : null;
+  renderer.clippingPlanes = (scn.clip && g !== null)
+    ? [new THREE.Plane(new THREE.Vector3(0, 1, 0), -(g - 10))]
+    : [];
+  camera.position.set(scn.pos[0], scn.pos[1], scn.pos[2]);
+  controls.target.set(scn.target[0], scn.target[1], scn.target[2]);
+  controls.update();
+  afterCameraMove();
+  renderer.render(scene, camera);
+  return true;
+}
+function renderScenePanel() {
+  const fixedBox = document.getElementById('scene_fixed');
+  const listBox = document.getElementById('scene_custom');
+  if (!fixedBox || !listBox) return;
+  fixedBox.innerHTML = '';
+  for (const scn of FIXED_SCENES) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'sbtn';
+    b.textContent = scn[1];
+    b.title = '固定视角：' + scn[1] + '（' + scn[0] + '）';
+    b.disabled = !state.bounds;
+    b.addEventListener('click', () => applyView(scn[0]));
+    fixedBox.appendChild(b);
+  }
+  listBox.innerHTML = '';
+  const arr = readScenes();
+  if (!arr.length) {
+    const empty = document.createElement('div');
+    empty.className = 'scn-empty';
+    empty.textContent = '暂无自定义场景';
+    listBox.appendChild(empty);
+    return;
+  }
+  arr.forEach((scn, i) => {
+    const row = document.createElement('div');
+    row.className = 'scn-row';
+    const go = document.createElement('button');
+    go.type = 'button';
+    go.className = 'sbtn scn-name';
+    go.textContent = scn.name;
+    go.title = '自定义镜头：应用';
+    go.addEventListener('click', () => applyScene(scn));
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'sbtn scn-del';
+    del.textContent = '×';
+    del.title = '删除该场景';
+    del.addEventListener('click', () => {
+      const cur = readScenes();
+      cur.splice(i, 1);
+      writeScenes(cur);
+      renderScenePanel();
+    });
+    row.appendChild(go);
+    row.appendChild(del);
+    listBox.appendChild(row);
+  });
+}
 
 /* 建筑外轮廓 = 全部墙体 AABB 的并集；楼板 / 门窗朝向 / 地面 / 包围盒统一以它为准 */
 function wallBounds(walls) {
@@ -1295,6 +1421,7 @@ function bindUI() {
 
   async function build(json) {
     clearModel();
+    state.drawingName = json.DrawingName || '';
     try {
       const extras = await resolveExtras();
       const { data, L } = buildModel(json, extras);
@@ -1316,6 +1443,8 @@ function bindUI() {
       showError('解析失败：' + e.message);
       console.error(e);
     }
+    renderScenePanel();   /* 固定场景需包围盒，自定义场景按新图纸名重新读取 */
+    renderer.render(scene, camera);
   }
 
   function readFile(file) {
@@ -1386,6 +1515,18 @@ function bindUI() {
   if (selChannel) {
     selChannel.addEventListener('change', () => setChannel(selChannel.value));
   }
+
+  const btnSceneSave = document.getElementById('btn_scene_save');
+  if (btnSceneSave) {
+    btnSceneSave.addEventListener('click', () => {
+      const def = '场景 ' + (readScenes().length + 1);
+      const name = window.prompt('场景名称（保存在本机浏览器，按图纸分别存储）', def);
+      if (name === null) return;
+      captureScene(name.trim() || def);
+      renderScenePanel();
+    });
+  }
+  renderScenePanel();
 
   /* 默认尝试加载示例 JSON */
   (async function loadDefault() {

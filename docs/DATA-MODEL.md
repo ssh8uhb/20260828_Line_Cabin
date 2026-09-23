@@ -177,6 +177,7 @@
 | normal 通道 | MeshNormalMaterial（视野空间法线） |
 | 视图预设 | 10 个：`iso-{ne,nw,se,sw}` / `elev-{s,n,w,e}` / `persp-1` / `persp-2`，全部由 `state.bounds` 推导，不依赖硬编码尺寸 |
 | persp 视角 | 视高 = `L.grade + 1700`，看向 `L.grade + 2800`；自动加水平裁剪面 `y = L.grade − 10` 裁掉地坪以下的基础 / 集水坑 |
+| 场景面板 | 固定 8 个 = 上行 8 个预设（南/北/西/东立面 + 东北/西北/东南/西南鸟瞰），不存储、实时由包围盒推算；自定义镜头存 `{name, pos, target, clip}`，写入 localStorage 键 `wm.scenes.v1:<DrawingName>`（按图纸独立一套），不可用时退化为会话内存；`clip=true` 时按当前 `L.grade − 10` 重算裁剪面 |
 
 ## 6. 已解析但当前未建模的字段
 
