@@ -58,6 +58,9 @@ python -m http.server 8123 --directory D:/Work/Project/20260828_Line_Cabin
 判定标准：截图非黑屏、门窗/屋面/楼梯齐全、页面统计栏数字与 JSON 一致
 （当前样本：图框 3、墙体 6、门 5、窗 7、柱 8、楼梯 4）。
 
+**动了门窗族几何（js/families.js）再加一步**：页面 Console 跑 `JSON.stringify(WMShot.familyCheck())`，
+要求 `offenders = 0`（样例基线 78 块）。门窗构件凸出墙面的坑与坐标约定见 docs/DATA-MODEL.md 5.2。
+
 需要交叉验证图片内容时，用本机识图脚本（用户全局规则要求：禁止回复「无法识别图片」）：
 
 ```powershell

@@ -3,7 +3,7 @@
  * 后续拿到 2D CAD 大样后，用真实几何替换对应 builder 即可，调用接口不变。
  *
  * 洞口实例 op：
- *   cx, cy  洞口中心（建筑平面坐标，mm）
+ *   cx, cy  洞口中心（建筑平面坐标，mm），必须落在墙体厚度中面上
  *   z0, h   洞口底标高与高度
  *   w       洞口宽度（沿墙方向）
  *   tw      墙厚（洞口深度方向）
@@ -12,6 +12,15 @@
  *   type    'door' | 'win'
  *   kind    DoorObject.Kind / WindowObject.Kind
  *   num     编号（M1824 / C1518 ...）
+ *
+ * 构件局部坐标（addPiece 的 u/v/n，单位 mm，全部相对洞口中心）：
+ *   u  沿墙方向，0 = 洞口中心，范围必须落在 ±w/2 内（框料正好 ±w/2）
+ *   v  高度方向，0 = 洞口下沿（op.z0）
+ *   n  墙厚方向，正方向指向室内；**所有构件必须落在 [−tw/2, +tw/2] 内**，
+ *      即门窗不许凸出墙面（室外侧 n = −tw/2，室内侧 n = +tw/2）
+ *   ⚠ 一旦有构件越出该范围，就会出现“窗框/把手悬在墙外”的错误外观，
+ *     所以新增族或改尺寸后，必须先用本文件的 check()（页面里是 WMShot.familyCheck()）
+ *     复核 offenders 为 0，再看 docs/DATA-MODEL.md 第 5.2 节的朝向坑说明。
  */
 (function () {
 'use strict';
@@ -51,7 +60,11 @@ function addPiece(g, op, u0, u1, v0, v1, n0, n1, mat) {
   const V = new THREE.Vector3(0, 1, 0);
   /* n 正方向指向室内（外法线反方向） */
   const N = new THREE.Vector3(-op.nx, 0, -op.ny).normalize();
-  const m = new THREE.Matrix4().makeBasis(U, V, N);
+  /* (U,V,N) 在西墙/北墙上是左手基（det = −1），setFromRotationMatrix 会退化成单位旋转，
+     构件被摆成“框料横穿墙厚、宽度伸出墙面”。这里取 V×N（与 U 同轴）当 x 轴，保证右手基；
+     盒体关于自身中心对称，轴向量取反不改变占用范围，构件仍落在 [−tw/2, +tw/2]、±w/2 内。 */
+  const Ux = new THREE.Vector3().crossVectors(V, N).normalize();
+  const m = new THREE.Matrix4().makeBasis(Ux, V, N);
   mesh.quaternion.setFromRotationMatrix(m);
 
   const um = (u0 + u1) / 2, vm = (v0 + v1) / 2, nm = (n0 + n1) / 2;
@@ -63,9 +76,59 @@ function addPiece(g, op, u0, u1, v0, v1, n0, n1, mat) {
   mesh.castShadow = true;
   mesh.receiveShadow = true;
   mesh.userData.familyPiece = true;
+  mesh.userData.op = op;   /* 供 check() 反查洞口局部坐标轴 */
   g.add(mesh);
 }
 
+/* 逐块量测门窗构件在洞口局部坐标（u/v/n）里的实际占用范围，返回越界清单。
+ * 判定标准（详见模块头与 docs/DATA-MODEL.md 5.2）：pieces 全部落在 ±w/2、0→h、±tw/2 内，
+ * offenders 必须为 0；非 0 说明族几何或朝向有问题（构件凸出墙面）。 */
+function check(group) {
+  const res = { pieces: 0, offenders: 0, detail: [] };
+  if (!group) return res;
+  const box = new THREE.Box3();
+  const c = new THREE.Vector3();
+  const T = 0.5;                       /* mm，浮点噪声容差 */
+  for (const mesh of group.children) {
+    const op = mesh.userData && mesh.userData.op;
+    if (!op) continue;
+    res.pieces++;
+    box.setFromObject(mesh);
+    let uMin = Infinity, uMax = -Infinity, vMin = Infinity;
+    let vMax = -Infinity, nMin = Infinity, nMax = -Infinity;
+    for (let i = 0; i < 8; i++) {
+      c.set(i & 1 ? box.max.x : box.min.x,
+            i & 2 ? box.max.y : box.min.y,
+            i & 4 ? box.max.z : box.min.z);
+      const dx = c.x - op.cx, dz = c.z - op.cy;
+      const u = dx * op.ax + dz * op.ay;
+      const n = -(dx * op.nx + dz * op.ny);
+      const v = c.y - op.z0;
+      uMin = Math.min(uMin, u); uMax = Math.max(uMax, u);
+      vMin = Math.min(vMin, v); vMax = Math.max(vMax, v);
+      nMin = Math.min(nMin, n); nMax = Math.max(nMax, n);
+    }
+    const bad = [];
+    if (uMin < -op.w / 2 - T) bad.push('u 越过洞口左边');
+    if (uMax > op.w / 2 + T) bad.push('u 越过洞口右边');
+    if (vMin < -T) bad.push('v 低于洞口下沿');
+    if (vMax > op.h + T) bad.push('v 高于洞口上沿');
+    if (nMin < -op.tw / 2 - T) bad.push('n 凸出室外墙面');
+    if (nMax > op.tw / 2 + T) bad.push('n 凸出室内墙面');
+    if (bad.length) {
+      res.offenders++;
+      if (res.detail.length < 10) {
+        const r1 = x => Math.round(x * 10) / 10;
+        res.detail.push({
+          num: op.num, type: op.type, family: pickFamily(op),
+          u: [r1(uMin), r1(uMax)], v: [r1(vMin), r1(vMax)], n: [r1(nMin), r1(nMax)],
+          bad: bad.join('；'),
+        });
+      }
+    }
+  }
+  return res;
+}
 
 /* 门扇：n 偏移到室内一侧（外法线反方向） */
 function doorLeaf(g, op, mats, u0, u1) {
@@ -99,10 +162,10 @@ function buildDoorDouble(g, op, mats) {
 function buildDoorBidir(g, op, mats) {
   const w = op.w, half = w / 2;
   buildDoorSingle(g, op, mats);
-  /* 双向开启：内侧再放一只把手，示意双向 */
+  /* 双向开启：室内侧再放一只把手，示意双向（n 为正指向室内，把手贴室内面内退 55–85） */
   doorHandle(g, op, mats, half - FRAME_W - 80);
   addPiece(g, op, half - FRAME_W - 86, half - FRAME_W - 74, 950, 1040,
-           -op.tw / 2 - 85, -op.tw / 2 - 55, mats.handle);
+           op.tw / 2 - 85, op.tw / 2 - 55, mats.handle);
 }
 
 function doorFrame(g, op, mats) {
@@ -159,6 +222,7 @@ const BUILDERS = {
 
 window.WMFamilies = {
   pickFamily: pickFamily,
+  check: check,
   /* 返回 { total, byFamily } */
   build(group, openings, mats) {
     const m = mats || defaultMats();

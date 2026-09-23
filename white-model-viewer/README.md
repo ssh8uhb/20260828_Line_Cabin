@@ -137,6 +137,17 @@ node tools/cdp-shot.mjs "http://localhost:8123/white-model-viewer/" 输出目录
 相机 pos / target / fov 与建筑包围盒，保证不同版本之间的出图可以逐像素比对。
 `--views=` 逗号分隔或 `all`；`--channels=` 逗号分隔；末尾数字是页面加载等待秒数（默认 8）。
 
+### 门窗族几何自检（改了 js/families.js 就跑到 0 为止）
+
+```js
+// 页面 Console 直接执行；也可由 CDP 探针调用
+JSON.stringify(WMShot.familyCheck())   // → {"pieces":78,"offenders":0,"detail":[]}
+```
+
+`pieces` = 门窗族块体总数，`offenders` = 越出洞口范围（凸出墙面 / 越过洞口边）的块数，
+**必须为 0**；非 0 时 `detail` 给出洞口号、族名与实测 u/v/n 区间。
+样例基线：78 块 / 0 越界。规则与「左手基导致构件朝向退化」的成因见 docs/DATA-MODEL.md 5.2。
+
 ## 文件结构
 
 ```text

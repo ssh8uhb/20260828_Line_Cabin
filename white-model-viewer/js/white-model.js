@@ -863,6 +863,10 @@ window.WMShot = {
   },
   saveScene: function (name) { captureScene(name); renderScenePanel(); return true; },
   applyScene: applyScene,
+  /* 门窗族自检：构件是否全部落在洞口范围内（offenders 必须为 0，见 docs/DATA-MODEL.md 5.2） */
+  familyCheck: function () {
+    return JSON.stringify(window.WMFamilies.check(state.groups.families));
+  },
   info: function () {
     return JSON.stringify({
       channel: state.channel,
