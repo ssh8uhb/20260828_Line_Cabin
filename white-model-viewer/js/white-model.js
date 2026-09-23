@@ -600,7 +600,14 @@ function buildLevels(data) {
     roof: (data.elev[4] !== undefined ? data.elev[4] : 173800) - zBase,
     steel: (data.elev[5] !== undefined ? data.elev[5] : 167659) - zBase,
   };
-  if (data.sump) L.sump = data.sump.elev - zBase;
+  if (data.sump) {
+    L.sump = data.sump.elev - zBase;
+    /* ElevationMm 缺失会让坑底变 NaN、整块集水坑几何失效，回退到默认 −1500 并告警 */
+    if (!isFinite(L.sump)) {
+      L.sump = -1500;
+      warn('集水坑缺少 ElevationMm，坑底已按默认 −1500 mm 生成');
+    }
+  }
   return L;
 }
 
@@ -1177,7 +1184,7 @@ function buildModel(json, extras) {
   }
   if (data.sump) {
     const s = data.sump;
-    const zB = L.sump !== undefined ? L.sump : -1500;
+    const zB = L.sump;
     addBox(G.extra, s.x0, s.y0, s.x0 + 100, s.y1, zB, L.base, M.slab);
     addBox(G.extra, s.x1 - 100, s.y0, s.x1, s.y1, zB, L.base, M.slab);
     addBox(G.extra, s.x0, s.y0, s.x1, s.y0 + 100, zB, L.base, M.slab);

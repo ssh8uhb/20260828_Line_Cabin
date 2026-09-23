@@ -193,7 +193,7 @@ JSON.stringify(WMShot.familyCheck())   // → {"pieces":78,"offenders":0,"detail
 | 钢梯踏步 | Box 序列 | SteelStairObject.InsertionPoint | 固定 **3 级**；踏步高 300、进深 300；宽 800（±400）；起点 `(x, y − 450)`，沿 +Y 排布 |
 | 钢爬梯 | 两根立柱 + 踏棍 | SteelLadderObject.InsertionPoint | 立柱截面 60×60、间距 600；总高固定 **3200**；踏棍自 200 起每 **300** 一根，截面 480×60×40；`FacingNormal` 未使用 |
 | 设备基础 | Box | PumpFoundationObject.Bounds | 高固定 300（`L.base → L.base + 300`） |
-| 集水坑 | 开口盒（四壁 + 底板，非布尔运算） | SumpPitObject.Bounds、ElevationMm | 壁厚 100、底板厚 100；顶 = `L.base`；底 = ElevationMm 换算为 `L.sump`；⚠ ElevationMm 必须存在（缺失会算出 NaN 几何，代码里的 −1500 兜底实际不生效） |
+| 集水坑 | 开口盒（四壁 + 底板，非布尔运算） | SumpPitObject.Bounds、ElevationMm | 壁厚 100、底板厚 100；顶 = `L.base`；底 = ElevationMm 换算为 `L.sump`；ElevationMm 缺失或非数值时回退 −1500 并在统计栏告警 |
 | 地面 / 散水 | 4 个 Box 组成的回字形实体 | 建筑外轮廓 `wb`（全部墙体 AABB 并集） | 外偏 **5000**；厚 **300**；顶 = `L.grade`；内外轮廓线画在 `L.grade + 10` |
 | 房间轮廓 / 房间名 | LineLoop + Sprite | RoomOutlineObject.Outline、RoomName | 轮廓线 z = 房间楼面 + 6；文字精灵 scale 1100；楼面 = 名称含「水泵间」→ `L.base`，否则 `L.south` |
 | 检修平台标注 | LineLoop + Sprite | MaintenancePlatformObject.Bounds | 线 z = `L.south + 6`；文字「检修平台」scale 900 |
@@ -238,7 +238,7 @@ JSON.stringify(WMShot.familyCheck())   // → {"pieces":78,"offenders":0,"detail
 | elev[3]（缺省 168900） | 168900 | +2141 | 室外地坪 |
 | elev[4]（缺省 173800） | 173800 | +7041 | 屋面 |
 | elev[5]（缺省 167659） | 167659 | +900 | 钢梯平台 |
-| SumpPitObject.ElevationMm | 165259 | −1500 | 集水坑底（必填；`L.sump` 未定义时的 −1500 兜底实际不会触发） |
+| SumpPitObject.ElevationMm | 165259 | −1500 | 集水坑底（缺失 / 非数值时回退 −1500 并告警） |
 
 ⚠ 索引来自 `Kind` 枚举而非数组顺序；换项目前要对照 JSON 说明文档核对 Kind 含义。
 
