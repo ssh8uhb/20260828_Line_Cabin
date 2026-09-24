@@ -28,10 +28,11 @@ white-model-viewer/     主交付物（白模查看器）
   js/white-model.js     JSON 解析 + 参数化建模 + 渲染 + UI
   js/families.js        门窗参数化族
   js/eaves.js           挑檐截面沿路径放样
-  js/terrain.js         地形 OBJ 导入 + 双控制点配准
+  js/environment.js     周边环境：地形面 / 河床面 / 水面（由高程点插值）
+  js/terrain.js         地形 OBJ 导入 + 双控制点配准（未接线）
   lib/                  three.js r128 + OrbitControls（本地依赖）
-  data/                 示例 JSON、挑檐截面
-  tools/                CDP 无头截图、DXF 截面提取
+  data/                 示例 JSON、挑檐截面、总平面图对位数据（site-context.json）
+  tools/                CDP 无头截图、DXF 截面提取、总平面图对位数据（site-context）生成与校验图
 Flie/输入文件/           原始输入资料（JSON / JSON 说明 / DWG / DXF）
 docs/                   交接说明、路线图、数据模型、会话纪要
 ```
@@ -42,13 +43,17 @@ docs/                   交接说明、路线图、数据模型、会话纪要
 # 1) 语法检查
 Set-Location white-model-viewer
 node --check js/white-model.js; node --check js/families.js
-node --check js/eaves.js; node --check js/terrain.js
+node --check js/eaves.js; node --check js/terrain.js; node --check js/environment.js
 
 # 2) 渲染截图（需本机有 Chrome/Edge；输出到临时目录，不要提交进仓库）
 node tools/cdp-shot.mjs "file:///D:/Work/Project/20260828_Line_Cabin/white-model-viewer/index.html?static=1&lines=1" "$env:TEMP/wm-check.png" 8
 
-# 3) 批量出图自检（10 视角 × 3 通道，输出目录 + manifest.json，同样不进仓库）
+# 3) 批量出图自检（12 视角 × 3 通道，输出目录 + manifest.json，同样不进仓库）
 node tools/cdp-shot.mjs "file:///D:/Work/Project/20260828_Line_Cabin/white-model-viewer/index.html?annot=0" "$env:TEMP/wm-batch" --views=all --channels=color,depth,normal
+
+# 3b) 带周边环境的截图与批量（地形 / 河床 / 水面；?env=1 用内嵌副本，离线可用）
+node tools/cdp-shot.mjs "file:///D:/Work/Project/20260828_Line_Cabin/white-model-viewer/index.html?env=1&annot=0" "$env:TEMP/wm-env.png" 8
+node tools/cdp-shot.mjs "file:///D:/Work/Project/20260828_Line_Cabin/white-model-viewer/index.html?env=1&annot=0" "$env:TEMP/wm-env-batch" --views=all --channels=color,depth,normal
 
 # 4) 或起本地静态服务
 python -m http.server 8123 --directory D:/Work/Project/20260828_Line_Cabin
@@ -60,6 +65,10 @@ python -m http.server 8123 --directory D:/Work/Project/20260828_Line_Cabin
 
 **动了门窗族几何（js/families.js）再加一步**：页面 Console 跑 `JSON.stringify(WMShot.familyCheck())`，
 要求 `offenders = 0`（样例基线 78 块）。门窗构件凸出墙面的坑与坐标约定见 docs/DATA-MODEL.md 5.2。
+
+**动了周边环境（js/environment.js）再加一步**：页面 Console 跑 `JSON.stringify(WMShot.envCheck())`，
+要求 `nanCount = 0`、`slopeMax ≤ 1.0`、`spikeMaxMm ≤ 600`、`platform.devMaxMm = 0`、`water.aboveLandCount = 0`
+（v0.4.0 基线：地形 13920 / 河床 1794 / 水面 632 三角，坡度 0.659）。算法与已知问题见 docs/DATA-MODEL.md 第 13 节。
 
 需要交叉验证图片内容时，用本机识图脚本（用户全局规则要求：禁止回复「无法识别图片」）：
 

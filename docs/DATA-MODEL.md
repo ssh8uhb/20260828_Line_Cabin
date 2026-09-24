@@ -9,7 +9,9 @@
 
 代码位置：
 `white-model-viewer/js/white-model.js`（parseDrawing / buildLevels / buildModel / carveWall / buildEdgeLines）、
-`js/families.js`（门窗参数化族）、`js/eaves.js`（挑檐截面扫掠）、`js/terrain.js`（地形 OBJ 配准）。
+`js/families.js`（门窗参数化族）、`js/eaves.js`（挑檐截面扫掠）、`js/terrain.js`（地形 OBJ 配准，未接线）、
+`js/environment.js`（周边环境：地形面 / 河床面 / 水面，见第 13 节）、
+`tools/dxf-site-context.mjs`（总平面图 DXF → 场地环境数据，见第 12 节）。
 
 ## 1. 顶层结构
 
@@ -35,6 +37,8 @@
   楼板、门窗朝向、地面/散水、包围盒、视图预设**统一以它为准**，不含任何写死的建筑尺寸。
 - **南侧区块**：楼面为 `L.south` 的房间（即名称不含「水泵间」的房间）轮廓并集，样例 = 200,200 – 7000,4800。
   其外缘 `sr.y1` 作为南侧区块与水泵间的分界线（`ySplit`），用于门洞底标高推断。
+- **场地（总平面图）对位**：模型坐标与总平面图坐标的换算、高程点 / 进水池 / 河道的原始数据见第 12 节
+  （`data/site-context.json`，v2；已由 `js/environment.js` 接入渲染，见第 13 节）。
 
 ## 3. 参数读取通则
 
@@ -203,17 +207,50 @@ JSON.stringify(WMShot.familyCheck())   // → {"pieces":78,"offenders":0,"detail
 
 | 项 | 数值 |
 | --- | --- |
-| 相机 | PerspectiveCamera fov 45、near 10、far 300000；初始位置 (13000, 10000, 21500)，target (3600, 7550, 3000) ⚠ 硬编码（initThree 阶段还没有模型数据）；模型加载后视图预设按包围盒重新定位 |
+| 相机 | PerspectiveCamera fov 45、near 10、far 600000；初始位置 (13000, 10000, 21500)，target (3600, 7550, 3000) ⚠ 硬编码（initThree 阶段还没有模型数据）；模型加载后视图预设按包围盒重新定位；OrbitControls `maxDistance = 260000` |
 | 背景 | `0xe9e9e9`；`?bg=RRGGBB` 可覆盖；depth / normal 通道强制纯黑 |
-| 光照 | HemisphereLight(0xffffff, 0xcfcfcf, 1.05) + DirectionalLight 1.25 @ (12000, 22000, 10000)，阴影贴图 2048²、正交阴影范围 ±16000 ⚠ 硬编码 |
+| 光照 | HemisphereLight(0xffffff, 0xcfcfcf, 1.05) + DirectionalLight 1.25 @ (12000, 22000, 10000)，阴影贴图 2048²、正交阴影范围 ±16000 ⚠ 硬编码；**载入周边环境后改为 ±90000**（`setShadowExtent`，灯位不动：原点 ±90 m 已覆盖地形盒） |
 | 渲染器 | PCFSoftShadowMap、sRGBEncoding、ACESFilmicToneMapping、exposure 1.05、pixelRatio ≤ 2 |
-| 材质 | 墙 0xffffff / 板 0xf3f3f3 / 屋面 0xeeeeee / 柱 0xfafafa / 地面 0xdedede / 玻璃 0xf2f2f2 透明 0.45 |
+| 材质 | 墙 0xffffff / 板 0xf3f3f3 / 屋面 0xeeeeee / 柱 0xfafafa / 地面 0xdedede / 玻璃 0xf2f2f2 透明 0.45；周边环境：地形 0x5c5c5c / 河床 0x444444 / 水面 0x38508c（roughness 0.15、透明 0.8、双面）/ 环境线 0x9a9a9a |
 | 线稿叠加 | `EdgesGeometry(geo, 30)`（二面角阈值 30°）黑色线；**分组名单 8 个**：walls / slabs / columns / roof / canopies / stairs / extra / families（新增实体分组必须同步该名单，否则新构件没有线稿）；默认隐藏，`?lines=1` 或勾选显示 |
-| depth 通道 | 自定义线性着色 ShaderMaterial：`uNear = max(相机到目标距离 − 建筑包围盒跨度, 1)`、`uFar = 距离 + 跨度 × 1.2`，近白远黑、背景纯黑 |
+| depth 通道 | 自定义线性着色 ShaderMaterial：`uNear = max(相机到目标距离 − 包围盒跨度, 1)`、`uFar = 距离 + 跨度 × 1.2`，近白远黑、背景纯黑；跨度取建筑包围盒，**载入周边环境后取「建筑 ∪ 地形盒」并集**（≈136 m，深度分辨率随之降到 ≈1.2 m/级，水面与河床的 1 m 落差已落到量化极限以下） |
 | normal 通道 | MeshNormalMaterial（视野空间法线） |
-| 视图预设 | 10 个：`iso-{ne,nw,se,sw}` / `elev-{s,n,w,e}` / `persp-1` / `persp-2`，全部由 `state.bounds` 推导，不依赖硬编码尺寸 |
-| persp 视角 | 视高 = `L.grade + 1700`，看向 `L.grade + 2800`；自动加水平裁剪面 `y = L.grade − 10` 裁掉地坪以下的基础 / 集水坑 |
-| 场景面板 | 固定 8 个 = 上行 8 个预设（南/北/西/东立面 + 东北/西北/东南/西南鸟瞰），不存储、实时由包围盒推算；自定义镜头存 `{name, pos, target, clip}`，写入 localStorage 键 `wm.scenes.v1:<DrawingName>`（按图纸独立一套），不可用时退化为会话内存；`clip=true` 时按当前 `L.grade − 10` 重算裁剪面 |
+| 视图预设 | 12 个：`iso-{ne,nw,se,sw}` / `elev-{s,n,w,e}` / `persp-1` / `persp-2` / `env-iso`（周边鸟瞰）/ `env-river`（河道视角），全部由 `state.bounds`（env 两个用 `state.envBounds`）推导，不依赖硬编码尺寸；env 两个需要先载入周边环境 |
+| persp 视角 | 视高 = `L.grade + 1700`，看向 `L.grade + 2800`；自动加水平裁剪面 `y = L.grade − 10` 裁掉地坪以下的基础 / 集水坑（env 视角不加裁剪面） |
+| 场景面板 | 固定 10 个 = 南/北/西/东立面 + 东北/西北/东南/西南鸟瞰 + 周边鸟瞰/河道视角（env 两个在未载入周边环境时置灰），不存储、实时由包围盒推算；自定义镜头存 `{name, pos, target, clip}`，写入 localStorage 键 `wm.scenes.v1:<DrawingName>`（按图纸独立一套），不可用时退化为会话内存；`clip=true` 时按当前 `L.grade − 10` 重算裁剪面 |
+
+### 5.5 周边环境（js/environment.js）
+
+默认值在 `js/environment.js` 的 `DEFAULT_PARAMS`，**`data/site-context.json` 的 `environment` 字段逐项覆盖**
+（`resolveParams()` 只接受 `number` 且 `> 0` 的值，唯一例外是 `bedUnderMm` 允许 ≤ 0；生成器把本表整份写进数据文件，
+所以改默认值要同时改 `DEFAULT_PARAMS` 与 `tools/dxf-site-context.mjs` 的 `ENVIRONMENT_PARAMS`，再重跑生成器 + 本节）。
+几何生成算法与坐标约定见第 13 节。
+
+| 参数 | 默认 | 含义 |
+| --- | --- | --- |
+| `marginMm` | 60000 | 地形范围：建筑墙体 AABB 每侧外扩 |
+| `gridMm` | 1500 | 地形网格间距（本例 85 × 91 格 → 7912 顶点 / 15470 三角，其中地形面 14534、河床面 1180） |
+| `platformOffsetMm` | 5000 | 场平（平台）范围：墙体 AABB 外扩，与散水一致 |
+| `platformSinkMm` | 300 | 平台面 = `L.grade − 300`（= 散水底面），整圈 pin 住不参与平滑 |
+| `idwPower` / `idwK` | 2 / 12 | 高程点插值（IDW）幂次 / 最近点个数 |
+| `despikeMm` | 600 | 3×3 中值去刺阈值（实测把 1387 mm 的原始刺压到 284 mm） |
+| `smoothIters` / `smoothLambda` | 8 / 0.45 | 受约束拉普拉斯平滑轮数 / 系数 |
+| `slopeMax` / `slopeHardIters` | 1.0 / 20 | 硬坡度上限（1:1）与迭代轮数；实测最大坡 0.659（1:1.5） |
+| `slopeTarget` / `slopeSoftIters` | 0.2 / 12 | 目标坡 1:5（摊开场平到自然地面的落差）与迭代轮数 |
+| `bankBlend` | 0.3 | 槽宽两侧各 30% 作为岸坡过渡带 |
+| `endTaperMm` | 10000 | 河槽自由端收口渐变长度（避免端头断崖） |
+| `bedMinDepthMm` | 800 | 河床材质分界：槽内低于插值地面超过该值才算河床 |
+| `bedUnderMm` | 200 | 河床材质还要整格低于当地水位该值（把材质边界藏到水面之下）；**≤ 0 = 关闭该限制**，河床铺满整个开凿河槽（岸上会出现网格量化的阶梯色块，见第 13 节假设 3） |
+| `waterDepthMm` | 1000 | 水深：水面 = 河床最低点 + 该值（数据文件可调） |
+| `waterClampMm` | 200 | 水面不得高于较低岸顶 − 该值（本例 16 个断面受此限制） |
+| `waterSmoothIters` | 6 | 水位沿程平滑轮数（去掉逐站取 min 造成的台阶） |
+| `skirtMm` | 3000 | 地块四周裙边高度 |
+| `corridorStationMm` / `corridorSampleMm` | 2000 / 500 | 河槽断面间距 / 断面采样间距（后者同时是水面条带的纵向细分步长） |
+
+**为什么环境材质用深灰**：当前光照（Hemisphere 1.05 + Directional 1.25）+ ACESFilmic（exposure 1.05）+ sRGB 下，
+入射面亮度是压缩的——实测 albedo 0/32/64/128/255 分别渲染成 14/161/203/229/243（8 位灰度），
+**albedo ≳ 0.4 一律糊成近白**。因此地形/河床/水面必须用 0x5c5c5c / 0x444444 / 0x38508c 级别的深色，
+换成浅灰就会和建筑白模分不开。
 
 ## 6. 已解析但当前未建模的字段
 
@@ -224,7 +261,8 @@ JSON.stringify(WMShot.familyCheck())   // → {"pieces":78,"offenders":0,"detail
 | `data.texts` | PlanMultilineTextObject | 已解析，未绘制；页面只显示 RoomOutlineObject 的房间名 |
 | `data.roofCanopies` | RoofPolylineObject Kind = 4 | 已解析，未建模；雨篷改由外门自动生成（5.3） |
 | `data.counts` | 所有图元计数 | 仅统计，不参与建模 |
-| terrain（`data/terrain.obj` + `data/terrain-registration.json`） | `js/terrain.js` | 解析与双控制点配准（平移+旋转+等比缩放）已实现，但 **buildModel 尚未接入**，当前样例不渲染地形 |
+| terrain（`data/terrain.obj` + `data/terrain-registration.json`） | `js/terrain.js` | 解析与双控制点配准（平移+旋转+等比缩放）已实现，但 **buildModel 尚未接入**，当前样例不渲染地形（地形改由总平面图高程点插值生成，见第 13 节） |
+| site-context（`data/site-context.json`） | `tools/dxf-site-context.mjs` 从总平面图 DXF 提取 | 对位变换、578 个高程点、进水池、河道岸线、陡坎与注记均已解析成坐标数据；**v2 起 `js/environment.js` 已接入**，面板「载入周边环境（默认数据）」生成地形面 / 河床面 / 水面（见第 12、13 节） |
 
 ## 7. 标高读取规则
 
@@ -281,7 +319,190 @@ JSON.stringify(WMShot.familyCheck())   // → {"pieces":78,"offenders":0,"detail
 | 设备基础 | Bounds.Min.x, Bounds.Min.y | |
 | 钢梯平台 / 爬梯 / 集水坑 / 检修平台 / 楼梯 / 地面轮廓 | — | 单例，取首个（楼梯取最后一个） |
 
-## 12. 修改指引
+## 12. 场地环境数据（总平面图对位）
+
+来源图纸 `Flie/输入文件/菖蒲垇项目/总平面图.dxf`（**UTF-8** 编码，与其它 GBK 图纸不同），
+由 `white-model-viewer/tools/dxf-site-context.mjs` 解析后输出 `white-model-viewer/data/site-context.json`
+（**版本 2**，含全部原始点坐标，约 106 KB），并自动把紧凑格式的同一份 JSON 写回 index.html 的
+`<script type="application/json" id="siteContextData">`（file:// 下 fetch / 同步 XHR 会被浏览器拦截，
+内嵌副本才是双击可用的路径）。v2 起由 `js/environment.js` 消费，生成地形 / 河床 / 水面（第 13 节）。
+
+### 12.1 图层 / 图块约定（图纸方给定）
+
+| 图层 / 图块 | 含义 | 读取字段 |
+| --- | --- | --- |
+| `WALL_OUT` **较大**矩形 | 建筑外墙轮廓线，用于模型对位 | LWPOLYLINE 顶点 |
+| `WALL_OUT` **较小**矩形 | 进水池位置 | LWPOLYLINE 顶点 |
+| `SXSS` | 河道岸线（成对出现 = 左右岸；**一条岸可拆成多段折线首尾相接**，生成器按端点 0.5 m 容差自动拼成整条，闭合折线不参与拼接） | LWPOLYLINE / LINE 顶点 |
+| 块 `gc200`（图层 `GCD`） | 高程点 | ATTRIB `height` = 高程值，**单位 m** |
+| `DMTZ` | 陡坎（斜坡）线 | 折线顶点 |
+| `ZJ` / `YHG_文字` / `DIM_*` | 河道名（麻桑河）、设计注记、尺寸与标高标注 | TEXT 内容 + 位置 |
+| `zdh` | 控制点（拟建提罐站检查点 1/2） | POINT 位置 |
+
+> **关于方位**：图纸没有画指北针。`X=东 / Y=北` 是从坐标量级推断的（X ≈ 574.35 km 只能作东向 easting，
+> Y ≈ 2880.46 km 只能作北向 northing），不是图纸标注。对位变换只用两套坐标系之间的**相对关系**，
+> 不依赖真北方位；建筑长轴（模型 +Y）与图纸北向相差 3.2962°（偏西）。
+> 对应关系为**同名轴一一对应、不做镜像**，判据：总平面图 −X 一侧是进水池 / 河道，与模型里取水构筑物在 −X 一致。
+
+### 12.2 对位变换（相似变换：平移 + 旋转 + 等比缩放 ×1000）
+
+- **缩放 1000**：总平面图单位 m → 模型 mm。
+- **旋转 θ = 3.29622°**：由建筑外墙轮廓线的四条边长方向角得到（角度先折叠到 `[0, 90)` 再取平均，
+  避免 180° 歧义）。总平面图 → 模型为 **R(−3.2962°)**。
+- **锚点**：旋转后 `(x + y)` 最小的建筑矩形角点（= 图纸上的西南角）
+  `site (574350.811, 2880461.595) m` ↔ `model (0, 0)`，即模型墙体 AABB 原点。
+
+| 方向 | 公式 |
+| --- | --- |
+| 总平面图 → 模型 | `p_model = R(−3.2962°) · (p_site − anchorSiteM) × 1000` |
+| 模型 → 总平面图 | `p_site = anchorSiteM + R(+3.2962°) · (p_model / 1000)` |
+
+- **高程换算**：`zAbsMm = 高程(m) × 1000`，`zModelMm = zAbsMm − 166759`（与第 7 节的 Z=0 基准一致）。
+- **精度自检**：变换往返误差 0.000000 mm；拟合残差 `fitResidualMm` 5.19 mm；建筑轮廓线在模型坐标系内
+  轴对齐误差 ≤ 3.6 mm（图纸本身的量取误差）。尺寸链交叉校核：进水池靠建筑一侧的边 → 建筑西外墙面
+  = 10000.5 mm（图纸标注 10000）、池宽 2800.5 mm（标注 2800）。
+
+### 12.3 JSON 结构
+
+| 段 | 内容 |
+| --- | --- |
+| `source` | 源 DXF 路径、字节数、修改时间、生成器脚本 |
+| `units` | 两套坐标系的单位与轴定义、Z 基准、方位说明（`orientationNote`：图纸无指北针，方位为推断） |
+| `alignment` | 变换类型、rotationDeg、锚点（两种坐标系）、两个方向的公式字符串 |
+| `building` | 建筑外墙轮廓线（`outlineSiteM` / `outlineModelMm`）、尺寸、四边边长、残差、模型轴线网格 |
+| `consistency` | 与**当前模型**的差异自检（见 12.4） |
+| `elevationPoints` | 578 个高程点，`pointFields = [xSiteM, ySiteM, elevationM, xModelMm, yModelMm, zAbsMm, zModelMm]`，高程区间 163.05 – 175.47 m |
+| `intakePool` | 进水池轮廓（两种坐标）、包围盒、尺寸、与建筑三边的净距 |
+| `riverChannel` | 河道名称（麻桑河）、`mainChannel`（主河槽 = 岸线 id 1 靠进水池一侧 + id 2 对岸，水面只在这两条之间生成）；2 条岸线（各由 2 段 SXSS 折线端点拼接：旧岸线 + 补画的北西延伸段，`segments` 字段记段数，岸线方向统一南→北、按链长排序取前两条为主河槽） |
+| `environment` | v2 新增：周边环境生成参数（第 5.5 节的覆盖值；缺项用 `DEFAULT_PARAMS`），查看器用 `resolveParams(environment)` 合并（只接受 `number` 且 `> 0`，`bedUnderMm` 例外允许 ≤ 0） |
+| `context` | `scarps`（DMTZ 陡坎 3 条）、`pipes`（出水主管 1 条）、`controlPoints`（2 个）、`texts`（40 条注记，含模型坐标） |
+
+### 12.4 与当前模型的不一致（重要）
+
+`consistency` 段是自动比对结果，当前样例（总平面图 2026-09-24 版 vs 页面内嵌 JSON 2026-08-31 版）：
+
+| 项 | 数值 | 说明 |
+| --- | --- | --- |
+| 宽 | 总平面图 7005.4 vs 模型 7200 mm | 差 194.6 mm，量级属图纸差异 |
+| 长 | 总平面图 17902.6 vs 模型 15100 mm | **差 2802.6 mm**，与 2026-09-22 立面图轴线总长 17700 一致 |
+| 进水池北边缘 | 超出当前模型北端 **1749.4 mm** | 直接后果：按旧模型建场地会把水池切掉一截 |
+
+旧的 `IntakeForebayObject` / `IntakeChannelSlopeObject` 位置同样与新图不符（旧 JSON 中取水构筑物在
+X −14100…−7613，新图进水池在 X −12801…−10001）。
+
+**结论：对位变换只依赖总平面图，模型按新图重新导出 JSON 后本文件坐标无需修改**；
+在重新导出前，不要把 `site-context.json` 的开发环境几何与当前模型混用。
+
+### 12.5 工具与校验图
+
+```powershell
+Set-Location white-model-viewer
+node tools/dxf-site-context.mjs                       # 重新解析 DXF → data/site-context.json（会打印一致性问题）
+node tools/site-context-plot.mjs                      # 生成对位校验图 HTML（默认输出到系统临时目录）
+node tools/cdp-shot.mjs "file:///<临时目录>/site-context-check.html" site-context.png 6
+```
+
+校验图（模型坐标系，mm）画出了：建筑外墙轮廓线（红）、模型墙体 AABB（橙虚线）、进水池（青）、
+SXSS 岸线（蓝）、DMTZ 陡坎（品红）、旧 JSON 取水构筑物（黄虚线）、578 个高程点、注记文字、
+角点坐标标签与长度差尺寸线；右下角小图为河道全貌。判读要点：**Y = 0 基准线应同时穿过总平面图
+轮廓线的南边与模型 AABB 的南边**，红色与橙色虚线在 X 方向基本重合、仅在 Y 方向差出 2803 mm。
+
+## 13. 周边环境渲染（地形面 / 河床面 / 水面）
+
+`js/environment.js`（`WMEnv`，纯数学部分不依赖 THREE，可在 Node 里直接跑数值自检）
+把 `data/site-context.json`（v2）变成三张面 + 环境线，由 `white-model.js` 的 `buildEnv()` 挂材质建组。
+**只在查看器里渲染，不导出网格**，沿用 color / depth / normal 三通道出图。
+
+### 13.1 输入
+
+| 字段 | 用途 |
+| --- | --- |
+| `elevationPoints.points` | 578 个高程点 `[xSiteM, ySiteM, elevM, xModelMm, yModelMm, zAbsMm, zModelMm]`，只用后三列 |
+| `riverChannel.banks[]` | 岸线折线（`id` / `outlineModelMm`）；**主河槽 = `mainChannel.bankIds`（本例 1 + 2）**，槽宽 26.3 – 39.1 m。每条主岸由图纸上多段首尾相接的 SXSS 折线拼接而成（生成器按端点 0.5 m 容差自动拼，`segments` 记段数），本例岸线沿北西延伸段穿出地形盒 |
+| `intakePool` | 进水池轮廓，只画线 |
+| `context.scarps / pipes / texts` | 陡坎 / 管道 / 注记，只画线或不画 |
+| `environment` | 第 5.5 节的参数 |
+| `level.grade`、`wallAabb` | 由调用方传入：室外地坪标高、墙体 AABB（平台面与挖空范围都从它推） |
+
+### 13.2 算法（按执行顺序）
+
+1. **河槽骨架** `corridorFrame()`：沿岸线 A 取站、对每站求到岸线 B 的最近点 → 中心线点对 + 槽宽，
+   按 `corridorStationMm`（2 m）重采样；`infoIn(x,y)` 用「投影到最近断面」判定 `inside` 与横向参数 `lat`
+   （0 = 岸 A，1 = 岸 B），并给出自由端收口系数 `taper`。不做多边形求交，越界靠后续裁剪。
+2. **分类高程点**：先丢掉地形盒外的点（578 → 304），盒内再按 `infoIn().inside` 分成槽内（本例 35）与槽外（269）。
+   全部 578 个点按槽内 / 槽外分是 123 / 455，但只有盒内点参与插值（`stats.corridor.inCorridorPts / outPts` 报的是盒内数）。
+3. **两套高程场**：槽外 IDW → `fLand`，槽内 IDW → `fBed`。**槽内底面 = `lerp(fLand, min(fBed, fLand), w(lat))`**，
+   `w` 在内侧 70% 为 1、两条岸线处为 0（`bankBlend` 过渡）——取 `min` 保证河道永远低于两侧地面
+   （槽内偶发的高程点不会冒出「假土包」），两端与地面无缝衔接，天然形成岸坡。
+4. **平台与挖空**：墙体 AABB 外扩 `platformOffsetMm` 的环带 = 平台面 `L.grade − 300`（正好是散水底面），
+   **整圈 pin 住**，后续平滑 / 坡度约束不得改动；**墙体 AABB 内的顶点标记为空洞**（不出面），
+   否则 168600 的平台面会把 Z=0 的水泵间埋掉。
+5. **去刺 + 平滑 + 坡度约束**（跳过 pin 与空洞）：3×3 中值去刺（阈值 `despikeMm`）→ 受约束拉普拉斯
+   （`smoothIters` / `smoothLambda`，坡度大处减小 λ 以保坡）→ 软坡度（超 `slopeTarget` 按 0.5 权重拉近，
+   `slopeSoftIters` 轮）→ 硬坡度（超 `slopeMax` 取两端均值，`slopeHardIters` 轮）。
+   ⚠ **网格分辨率与平滑尺度耦合**：拉普拉斯的作用长度 ∝ `gridMm·√iters`，加密网格反而更不平滑——
+   实测 `slopeMax` 在 gridMm 1500 / 1000 / 750 / 500 下为 0.659 / 0.96 / 1.0 / 1.075，
+   所以本轮**否掉了网格加密**，保持 1.5 m。
+6. **水位**：每站 `wl = min(槽内最低点 + waterDepthMm, 较低岸顶 − waterClampMm)`，再沿程平滑
+   （`waterSmoothIters`，去掉逐站取 min 的台阶）；本例 80 个有水断面（18 个受岸顶限制，2 个跳过，走廊共 170 站）。
+7. **水面**：用**最终网格表面** `sampleSurface()` 在每个断面上找 `surface < wl` 的两次穿越 → 岸线交点；
+   水位低于整个断面则不生成该站水面。相邻两站（站序必须真的相邻）之间连成四边形，并按
+   `corridorSampleMm`（0.5 m）**纵向细分**：单个四边形把岸线拉成了米级锯齿（实测二阶差分 ≈1 m），
+   细分后再按「两站插值出的断面」重求交点，岸线误差降到 ≈0.1 m。水面比水位抬 **20 mm**（`waterLift`），
+   交点在网格面上，抬升避免共面闪烁。断面先按地形盒裁剪，否则水面会伸出地块悬空。
+8. **河床面**：与地形面**共用同一套顶点坐标**、按格子分材质（`info inside && 低于两侧地面 bedMinDepthMm
+   && 整格低于当地水位 bedUnderMm`），边界无缝隙、不重叠、无 z-fighting，只在材质上区分（本例 1794 三角）。
+   `bedUnderMm` 的作用见假设 3。
+9. **环境线**（`envLines`）：地形盒四周、平台环内外轮廓、主河槽两条岸线（盒内裁切）、进水池矩形、
+   其余 SXSS 折线（盒内裁切），全部按 `sampleSurface()` 抬 20 mm 贴地（`lineLift`，本例 5 段）。
+10. **裙边**：地形盒四周沿边向下 `skirtMm`（3 m）的竖直面，避免低视角看到面的背面 / 悬空。
+
+### 13.3 验收与自检
+
+```powershell
+Set-Location white-model-viewer
+node --check js/environment.js
+node tools/dxf-site-context.mjs                       # 重生成 v2 数据 + 同步 index.html 内嵌副本
+node tools/cdp-shot.mjs "file:///.../index.html?env=1&annot=0" "$env:TEMP/wm-env.png" 8
+node tools/cdp-shot.mjs "file:///.../index.html?env=1&annot=0" "$env:TEMP/wm-env-batch" --views=all --channels=color,depth,normal
+```
+
+页面 Console 跑 `JSON.stringify(WMShot.envCheck())`，当前基线（`data/site-context.json` v2）：
+
+| 指标 | 基线 | 要求 |
+| --- | --- | --- |
+| `nanCount` | 0 | 0（不出现 NaN 几何） |
+| `slopeMax` | 0.659 | ≤ 1.0（1:1） |
+| `spikeMaxMm` / `spikeRawMm` | 280 / 1387 | ≤ 600（去刺后的剩余起伏） |
+| `platform.devMaxMm` | 0（164 点） | 0（平台严格 = `L.grade − 300`） |
+| `hole.count` | 40 顶点 | 建筑范围挖空 |
+| `water.aboveLandCount` | 0 | 0（水面不越岸） |
+| `water.gapMinMm ~ gapMaxMm` | 1 ~ 1166 | 未受 clamp 处 ≈ `waterDepthMm` |
+| `water.maxStepMm` | 190 | 相邻站水位差不出现台阶 |
+| `counts` | 地形 13920 / 河床 1794 / 水面 632 / 裙边 704（三角），环境线 5 段 | 均 > 0 |
+| 建筑基线不回归 | 图框 3、墙体 6、门 5、窗 7、柱 8、楼梯 4；`familyCheck().offenders = 0`（78 块） | 不变 |
+
+### 13.4 假设与已知问题
+
+1. **主河槽两条岸线各由 2 段 SXSS 折线端点拼接**（用户 2026-09-24 补画的北西延伸段接在旧岸线端点，
+   容差 0.5 m）；延伸段沿西北方向穿出地形盒，**河道在盒边自然截断、两端不再收口**（`taperStart/End = false`）。
+   其余 SXSS 折线为渠道 / 护坡岸线，只画线不做水面；若它们需要出水面，改 `riverChannel.mainChannel.bankIds` 即可。
+2. **进水池不单独做坑底**：其足迹基本落在主河槽内、池内 3 个高程点与河床同量级，只画轮廓线；
+   要按结构建模应在建筑 JSON 侧处理。
+3. **河床 / 地形的材质边界是网格量化的**（材质按格子分配，1.5 m 网格 → 边界呈 1.5 m 阶梯）：
+   边界若露在岸上，肉眼就是一圈「梯田」色块（实测过 `bedUnderMm ≤ 0` 的版本）。
+   现默认 `bedUnderMm = 200`，边界藏在水面之下，可见岸线只由水面条带定义；
+   代价是河床材质只覆盖水下部分（在 color 通道里表现为水色的深浅变化，dry 河段是地形色）。
+4. **平台面取 `L.grade − 300`**：与散水底面严丝合缝；但总平面图东南侧「地面硬化」高程点
+   169.5 – 169.8 m 比平台高 0.9 – 1.2 m，散水外缘会出现缓坡台阶（两份图纸版本不一致所致，
+   重导 JSON 后自然消失）。
+5. **两侧数据来自不同版本**：总平面图（2026-09-24）与内嵌模型 JSON（2026-08-31）长边差 2802.6 mm，
+   地形按总平面图生成、建筑按模型生成，见 12.4。**不要**在重新导出模型前把两者当作同一版设计使用。
+6. **depth 通道在 env 下分辨率下降**：跨度按「建筑 ∪ 地形盒」取（≈136 m），约 1.2 m/级，
+   水面与河床的 1 m 落差已在量化极限附近；normal 通道里水面是法线朝上的平面，靠色差也不易分辨。
+   要靠色差区分水面请用 color 通道。
+
+## 14. 修改指引
 
 - **换项目时先看这些**：标高 Kind 枚举与 §7 表的对应关系、初始相机与平行光位置（initThree 里硬编码）、
   南侧区块是否真由「非水泵间房间」定义（若新项目的房间命名不同，`ySplit` 与南侧填板会一起失效）。
@@ -292,5 +513,11 @@ JSON.stringify(WMShot.familyCheck())   // → {"pieces":78,"offenders":0,"detail
 - 新增实体分组：除了在 buildModel 里建组，还要把组名加进 index.html 的图层勾选框与
   `buildEdgeLines()` 的分组名单，否则没有线稿叠加。
 - 新增外部素材（挑檐截面 / 雨篷截面 / 地形）：既要放 `data/` 下的文件，也要在 index.html 内嵌同样内容的
-  `<script type="application/json" id="...">` 占位，否则 file:// 打开会缺数据。
+  `<script type="application/json" id="...">` 占位，否则 file:// 打开会缺数据（`site-context.json` 的内嵌副本
+  由 `tools/dxf-site-context.mjs` 自动写回，不要手改）。
+- 改周边环境算法或参数：改 `js/environment.js`，同步本文件 5.5 / 13 节与 `tools/dxf-site-context.mjs` 的
+  `ENVIRONMENT_PARAMS`（两处默认值必须一致），并重跑生成器刷新数据文件与内嵌副本。
 - 采集到新样本时，先跑一次并在控制台看 `data.unknown`，确认是否有新图元类型未处理。
+- 总平面图更新后重跑 `tools/dxf-site-context.mjs`（第 12 节）；建筑图纸重新导出 JSON 后，
+  核对 `consistency` 段的 `deltaWidthMm` / `deltaLengthMm` / `intakeNorthOverhangMm` 是否收敛到 0 附近，
+  未收敛说明两份图纸不同版本，不要把两者混用。

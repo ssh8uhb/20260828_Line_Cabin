@@ -29,13 +29,20 @@ const state = {
   labelsOn: true,      // 文字标注开关状态
   baseBackground: null,
   drawingName: '',     // 当前图纸名（场景按它分别持久化）
+  wallAabb: null,      // 建筑外墙 AABB（周边环境地形以它为中心）
+  siteContext: null,   // 缓存的周边环境数据（site-context.json，切换图纸后自动重建）
+  envOn: false,        // 周边环境是否已载入
+  envStats: null,      // 周边环境生成统计
+  envBounds: null,     // 周边环境包围盒（视图预设 / 深度区间用）
+  envFrame: null,      // 主河槽骨架（env-river 视角用）
+  envField: null,      // 环境高程网格（env-river 视角取地面高程用）
 };
 
 function log(msg) { state.log.push(msg); }
 function warn(msg) { state.warnings.push(msg); log('⚠ ' + msg); }
 
 /* ---------------- Three.js 初始化 ---------------- */
-let renderer, scene, camera, controls;
+let renderer, scene, camera, controls, sunLight;
 const STATIC = /[?&]static=1/.test(location.search);
 function initThree() {
   const container = document.getElementById('viewer');
@@ -43,7 +50,7 @@ function initThree() {
   state.baseBackground = new THREE.Color(0xe9e9e9);
   scene.background = state.baseBackground;
 
-  camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 10, 300000);
+  camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 10, 600000);
   camera.position.set(13000, 10000, 21500);
 
   renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -61,7 +68,7 @@ function initThree() {
   controls.enableDamping = true;
   controls.dampingFactor = 0.08;
   controls.minDistance = 800;
-  controls.maxDistance = 80000;
+  controls.maxDistance = 260000;
   controls.maxPolarAngle = Math.PI * 0.62;
   controls.update();
 
@@ -70,13 +77,10 @@ function initThree() {
   sun.position.set(12000, 22000, 10000);
   sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
-  const d = 16000;
-  sun.shadow.camera.left = -d;
-  sun.shadow.camera.right = d;
-  sun.shadow.camera.top = d;
-  sun.shadow.camera.bottom = -d;
   sun.shadow.camera.far = 60000;
+  sunLight = sun;
   scene.add(sun);
+  setShadowExtent(16000);
 
   window.addEventListener('resize', () => {
     camera.aspect = window.innerWidth / window.innerHeight;
@@ -102,6 +106,15 @@ function initThree() {
   })();
 }
 
+/* 阴影正交相机范围：默认只罩住建筑，载入周边环境后放大到地形范围 */
+function setShadowExtent(d) {
+  if (!sunLight) return;
+  const c = sunLight.shadow.camera;
+  c.left = -d; c.right = d; c.top = d; c.bottom = -d;
+  c.far = d * 4;
+  c.updateProjectionMatrix();
+}
+
 /* ---------------- 材质 ---------------- */
 const M = {
   wall:    new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.85, metalness: 0.02 }),
@@ -112,6 +125,12 @@ const M = {
   annot:   new THREE.LineBasicMaterial({ color: 0x9a9a9a, transparent: true, opacity: 0.8 }),
   glass:   new THREE.MeshStandardMaterial({ color: 0xf2f2f2, roughness: 0.12, metalness: 0.05, transparent: true, opacity: 0.45 }),
   handle:  new THREE.MeshStandardMaterial({ color: 0xd4d4d4, roughness: 0.35, metalness: 0.2 }),
+  /* 环境面反照率刻意压暗：本页照度 ≈2.3× 且 ACES 高光肩部很陡，
+   * 反照率 >0.5 的三张面最终都会渲染成同一个近白色，三通道无法分色（实测曲线见文档）。 */
+  terrain: new THREE.MeshStandardMaterial({ color: 0x5c5c5c, roughness: 0.95, side: THREE.DoubleSide }),
+  riverBed: new THREE.MeshStandardMaterial({ color: 0x444444, roughness: 0.95, side: THREE.DoubleSide }),
+  water:   new THREE.MeshStandardMaterial({ color: 0x38508c, roughness: 0.15, metalness: 0.0, transparent: true, opacity: 0.8, side: THREE.DoubleSide }),
+  envLine: new THREE.LineBasicMaterial({ color: 0x9a9a9a, transparent: true, opacity: 0.9 }),
 };
 
 function makeGroup(name) {
@@ -759,12 +778,26 @@ function tuneDepthUniforms() {
   const m = state._depthMat;
   if (!m || !camera) return;
   const dist = camera.position.distanceTo(controls.target);
-  const b = state.bounds;
+  const b = viewBounds();
   const span = b
     ? Math.max(b.x1 - b.x0, b.z1 - b.z0, b.y1 - b.y0)
     : dist;
   m.uniforms.uNear.value = Math.max(dist - span, 1);
   m.uniforms.uFar.value = dist + span * 1.2;
+}
+
+/* 出图取景范围：载入周边环境后把地形盒并进来，保证深度通道覆盖全场景 */
+function viewBounds() {
+  const b = state.bounds;
+  if (!state.envOn || !state.envBounds) return b;
+  if (!b) return state.envBounds;
+  const e = state.envBounds;
+  return {
+    x0: Math.min(b.x0, e.x0), x1: Math.max(b.x1, e.x1),
+    y0: Math.min(b.y0 !== undefined ? b.y0 : e.y0, e.y0),
+    y1: Math.max(b.y1 !== undefined ? b.y1 : e.y1, e.y1),
+    z0: Math.min(b.z0, e.z0), z1: Math.max(b.z1, e.z1),
+  };
 }
 
 function afterCameraMove() {
@@ -797,11 +830,127 @@ function setChannel(mode) {
   if (renderer && scene && camera) renderer.render(scene, camera);
 }
 
+/* ---------------- 周边环境（地形面 / 河床面 / 水面） ----------------
+ * 输入 data/site-context.json（v2，由 tools/dxf-site-context.mjs 生成）；
+ * 纯数学与几何在 js/environment.js（WMEnv），这里只负责挂材质、建组与 UI 联动。
+ */
+const ENV_GROUPS = ['terrain', 'riverBed', 'riverWater', 'envLines'];
+
+function envStatsText(sc, st) {
+  if (!st) return '未载入';
+  const c = st.counts || {};
+  const p = Math.abs(st.platform && st.platform.devMaxMm || 0);
+  const w = st.water || {};
+  const lines = [
+    `地形 ${c.terrainTris || 0} 三角 · 河床 ${c.bedTris || 0} · 水面 ${c.waterTris || 0}`,
+    `高程 ${st.zMinMm} ~ ${st.zMaxMm} mm · 最大坡 1:${st.slopeMax ? fmt(1 / st.slopeMax) : '—'} · 平台偏差 ${fmt(p)} mm`,
+  ];
+  if (w.stations) {
+    lines.push(`水面 ${w.surfMinMm} ~ ${w.surfMaxMm} mm · ${w.stations} 断面（岸顶限制 ${w.clamped}）`);
+  }
+  if (st.nanCount) lines.push(`⚠ ${st.nanCount} 个网格点插值失败`);
+  if (sc && sc.elevationPoints) {
+    lines.push(`高程点 ${sc.elevationPoints.count || (sc.elevationPoints.points || []).length} 个 · 数据 v${sc.version || 1}`);
+  }
+  return lines.join('<br>');
+}
+
+function clearEnv() {
+  for (const name of ENV_GROUPS) {
+    const g = state.groups[name];
+    if (!g) continue;
+    g.traverse(o => { if (o.geometry) o.geometry.dispose(); });
+    scene.remove(g);
+    state.groups[name] = null;
+    delete state.groups[name];
+  }
+  state.auxLines = state.auxLines.filter(o => !(o.userData && o.userData.env));
+  state.envOn = false; state.envStats = null; state.envBounds = null; state.envFrame = null;
+  setShadowExtent(16000);
+  const el = document.getElementById('envStats');
+  if (el) el.textContent = '未载入';
+}
+
+function buildEnv(sc, focus) {
+  if (!sc) return false;
+  const env = window.WMEnv;
+  if (!env) { warn('周边环境：js/environment.js 未载入'); return false; }
+  if (!state.levels || !state.wallAabb) { warn('周边环境：建筑尚未生成，无法对位'); return false; }
+  clearEnv();
+  let out = null;
+  try {
+    out = env.build({
+      data: sc, THREE: THREE, level: state.levels,
+      wallAabb: state.wallAabb, params: env.resolveParams(sc.environment),
+    });
+  } catch (e) {
+    warn('周边环境生成失败：' + e.message);
+    console.error(e);
+    return false;
+  }
+  const groups = {
+    terrain: makeGroup('terrain'),
+    riverBed: makeGroup('riverBed'),
+    riverWater: makeGroup('riverWater'),
+    envLines: makeGroup('envLines'),
+  };
+  const pairs = [[groups.terrain, out.terGeo, M.terrain], [groups.riverBed, out.bedGeo, M.riverBed]];
+  for (const [g, geo, mat] of pairs) {
+    if (!geo.attributes.position.count) continue;
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.receiveShadow = true;
+    g.add(mesh);
+  }
+  if (out.waterGeo.attributes.position.count) {
+    const mesh = new THREE.Mesh(out.waterGeo, M.water);
+    mesh.renderOrder = 2;
+    groups.riverWater.add(mesh);
+  }
+  if (out.skirtGeo.attributes.position.count) {
+    const skirt = new THREE.Mesh(out.skirtGeo, M.riverBed);
+    skirt.receiveShadow = true;
+    groups.terrain.add(skirt);
+  }
+  for (const ln of out.lines) {
+    const pts = ln.pts.map(p => new THREE.Vector3(p[0], p[1], p[2]));
+    if (pts.length < 2) continue;
+    const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), M.envLine);
+    line.userData.env = true;
+    state.auxLines.push(line);
+    groups.envLines.add(line);
+  }
+
+  const b = out.field.box, st = out.stats;
+  state.envStats = st;
+  state.envField = out.field;
+  state.envFrame = out.field.frame;
+  state.envBounds = { x0: b.x0, x1: b.x1, z0: b.y0, z1: b.y1, y0: st.zMinMm, y1: st.zMaxMm };
+  state.envOn = true;
+
+  for (const m of out.warnings) warn(m);
+  log(`周边环境：地形 ${out.stats.counts.terrainTris} 三角 / 河床 ${out.stats.counts.bedTris} / 水面 ${out.stats.counts.waterTris}，格距 ${out.field.gridMm} mm`);
+  const chk = { chk_terrain: 'terrain', chk_riverbed: 'riverBed', chk_water: 'riverWater', chk_envlines: 'envLines' };
+  for (const id in chk) {
+    const el = document.getElementById(id);
+    if (el) el.checked = true;
+  }
+  setShadowExtent(90000);
+  const elStats = document.getElementById('envStats');
+  if (elStats) elStats.innerHTML = envStatsText(sc, out.stats);
+  if (state.channel !== 'color') setChannel(state.channel);   /* 辅助通道下同步隐藏环境线 */
+  renderScenePanel();
+  /* 用户主动载入时直接切到周边鸟瞰，否则地形在地形盒外看不见（脚本载入不动相机） */
+  if (focus) applyView('env-iso');
+  else renderer.render(scene, camera);
+  return true;
+}
+
 /* ---------------- 视图预设（由建筑包围盒推导，适配任意 JSON） ---------------- */
 const VIEW_NAMES = [
   'iso-ne', 'iso-nw', 'iso-se', 'iso-sw',
   'elev-s', 'elev-n', 'elev-w', 'elev-e',
   'persp-1', 'persp-2',
+  'env-iso', 'env-river',
 ];
 /* 平面方位 → Three.js 方向：JSON 的 (X,Y) 映射到 (x,z)，南 = 计划 Y 小的一侧 */
 const ISO_DIRS = { 'iso-ne': [1, 1], 'iso-nw': [-1, 1], 'iso-se': [1, -1], 'iso-sw': [-1, -1] };
@@ -825,6 +974,42 @@ function applyView(name) {
     else if (name === 'elev-n') pos = [cx, cy, b.z1 + D];
     else if (name === 'elev-w') pos = [b.x0 - D, cy, cz];
     else pos = [b.x1 + D, cy, cz];
+  } else if (name.indexOf('env-') === 0) {
+    /* 周边环境视角：用地形盒取景（envBounds），不套用人视裁剪面 */
+    const eb = state.envOn ? state.envBounds : null;
+    if (!eb) return false;
+    const ecx = (eb.x0 + eb.x1) / 2, ecz = (eb.z0 + eb.z1) / 2;
+    const ediag = Math.sqrt((eb.x1 - eb.x0) * (eb.x1 - eb.x0) +
+                            (eb.z1 - eb.z0) * (eb.z1 - eb.z0) +
+                            (eb.y1 - eb.y0) * (eb.y1 - eb.y0));
+    if (name === 'env-iso') {
+      /* 全盒鸟瞰：自南偏东上方看，建筑在近景、河槽向西南延伸 */
+      pos = [ecx + ediag * 0.32, eb.y1 + ediag * 0.55, eb.z0 - ediag * 0.18];
+      target = [ecx, (eb.y0 + eb.y1) / 2, ecz];
+    } else {
+      /* 河道视角：河槽中心线上方 40 m 的无人机位，沿槽看下游（站序方向不等于水流方向，取离建筑更远的一侧） */
+      const fr = state.envFrame, f = state.envField;
+      if (!fr || !fr.stations.length || !f || !window.WMEnv) return false;
+      const wall = state.wallAabb;
+      const bcx = (wall.x0 + wall.x1) / 2, bcy = (wall.y0 + wall.y1) / 2;
+      const st = fr.stations;
+      let i0 = 0, bd = Infinity;
+      for (let i = 0; i < st.length; i++) {
+        const d = (st[i].x - bcx) * (st[i].x - bcx) + (st[i].y - bcy) * (st[i].y - bcy);
+        if (d < bd) { bd = d; i0 = i; }
+      }
+      /* 沿槽选「下游」：i0 ± 35 两站里取离建筑更远的一侧（站序方向不等于水流方向） */
+      const ctr = i => { const c = st[i]; return [(c.ax + c.bx) / 2, (c.ay + c.by) / 2]; };
+      const dist2 = i => { const c = ctr(i); return (c[0] - bcx) * (c[0] - bcx) + (c[1] - bcy) * (c[1] - bcy); };
+      const ia = Math.max(0, i0 - 35), ib = Math.min(st.length - 1, i0 + 35);
+      const i1 = dist2(ib) > dist2(ia) ? ib : ia;
+      /* 航道上方 40 m 的无人机位，看下游槽底：岸上近水平视角会被 1.5 m 网格起伏挡水 */
+      const c0 = ctr(i0), c1 = ctr(i1);
+      const gz0 = window.WMEnv.sampleSurface(f, c0[0], c0[1]);
+      const gz1 = window.WMEnv.sampleSurface(f, c1[0], c1[1]);
+      pos = [c0[0], (isFinite(gz0) ? gz0 : eb.y1) + 40000, c0[1]];
+      target = [c1[0], (isFinite(gz1) ? gz1 : eb.y0) + 500, c1[1]];
+    }
   } else { /* persp-1 / persp-2：室外地坪 + 1700 视高 */
     const eyeY = gradeY + 1700;
     target = [cx, gradeY + 2800, cz];
@@ -861,6 +1046,35 @@ window.WMShot = {
     return true;
   },
   channel: setChannel,
+  /* 周边环境接口：载入 / 清除 / 读取统计 */
+  env: function () {
+    return JSON.stringify({ on: state.envOn, bounds: state.envBounds, stats: state.envStats });
+  },
+  loadEnv: function (sc) { return buildEnv(sc || state.siteContext); },
+  clearEnv: clearEnv,
+  /* 周边环境验收指标（地形/河床/水面几何与水质自检） */
+  envCheck: function () {
+    const st = state.envStats;
+    if (!state.envOn || !st) return JSON.stringify({ on: false });
+    const c = st.counts || {}, w = st.water || {};
+    return JSON.stringify({
+      on: true,
+      nanCount: st.nanCount,
+      slopeMax: st.slopeMax,
+      spikeMaxMm: st.spikeMaxMm,
+      spikeRawMm: st.spikeRawMm,
+      platform: st.platform,
+      hole: st.hole,
+      corridor: st.corridor,
+      water: {
+        stations: w.stations, clamped: w.clamped, skipped: w.skipped,
+        aboveLandCount: w.aboveLandCount, gapMinMm: w.gapMinMm, gapMaxMm: w.gapMaxMm,
+        surfMinMm: w.surfMinMm, surfMaxMm: w.surfMaxMm, maxStepMm: w.maxStepMm,
+      },
+      counts: c,
+      warnings: state.warnings.slice(),
+    });
+  },
   scenes: function () {
     return JSON.stringify({
       key: sceneKey(),
@@ -884,12 +1098,14 @@ window.WMShot = {
 };
 
 /* ---------------- 场景（固定视角 + 自定义镜头；按图纸名分别持久化） ---------------- */
-/* 固定 8 个：4 个正立面 + 4 个角部向下鸟瞰（由建筑包围盒推算，见 applyView） */
+/* 固定视角：4 个正立面 + 4 个角部鸟瞰（由建筑包围盒推算，见 applyView）+
+ * 2 个周边环境视角（第三项为 true 表示需要先载入周边环境） */
 const FIXED_SCENES = [
   ['elev-s', '南立面'], ['elev-n', '北立面'],
   ['elev-w', '西立面'], ['elev-e', '东立面'],
   ['iso-ne', '东北鸟瞰'], ['iso-nw', '西北鸟瞰'],
   ['iso-se', '东南鸟瞰'], ['iso-sw', '西南鸟瞰'],
+  ['env-iso', '周边鸟瞰', true], ['env-river', '河道视角', true],
 ];
 const SCENE_STORE_PREFIX = 'wm.scenes.v1:';
 const sceneCache = {};    // localStorage 不可用时的会话内退路
@@ -959,8 +1175,9 @@ function renderScenePanel() {
     b.type = 'button';
     b.className = 'sbtn';
     b.textContent = scn[1];
-    b.title = '固定视角：' + scn[1] + '（' + scn[0] + '）';
-    b.disabled = !state.bounds;
+    const needEnv = !!scn[2];
+    b.title = '固定视角：' + scn[1] + '（' + scn[0] + '）' + (needEnv ? '，需先载入周边环境' : '');
+    b.disabled = !state.bounds || (needEnv && !state.envOn);
     b.addEventListener('click', () => applyView(scn[0]));
     fixedBox.appendChild(b);
   }
@@ -1035,6 +1252,7 @@ function buildModel(json, extras) {
 
   /* ---- 建筑外轮廓 + 南侧区块（楼面为 L.south 的房间并集）---- */
   const wb = wallBounds(data.walls);
+  state.wallAabb = { x0: wb.x0, y0: wb.y0, x1: wb.x1, y1: wb.y1 };   /* 周边环境地形以此为基准 */
   let sr = null;
   for (const r of data.rooms) {
     if (r.floor !== L.south) continue;
@@ -1359,11 +1577,14 @@ function bindUI() {
 
   function clearModel() {
     for (const g of Object.values(state.groups)) {
+      if (!g) continue;
       scene.remove(g);
       while (g.children.length) g.remove(g.children[0]);
     }
     for (const s of state.labels) scene.remove(s);
-    state.groups = {}; state.labels = []; state.lineOverlays = [];
+    state.groups = {}; state.labels = []; state.lineOverlays = []; state.auxLines = [];
+    state.envOn = false; state.envStats = null; state.envBounds = null;
+    state.envFrame = null; state.envField = null;
     state.log = []; state.warnings = [];
   }
 
@@ -1399,14 +1620,15 @@ function bindUI() {
       if (el && el.textContent.trim()) return el.textContent;
       return null;
     };
-    const [eavesProfile, canopyProfile, terrainReg, terrainObj] = await Promise.all([
+    const [eavesProfile, canopyProfile, terrainReg, terrainObj, siteContext] = await Promise.all([
       readJSON('eavesProfileData', 'data/eaves-profile.json'),
       readJSON('canopyProfileData', 'data/canopy-profile.json'),
       readJSON('terrainRegData', 'data/terrain-registration.json'),
       readText('terrainObjData', 'data/terrain.obj'),
+      readJSON('siteContextData', 'data/site-context.json'),
     ]);
     const terrain = (terrainReg && terrainObj) ? { reg: terrainReg, objText: terrainObj } : null;
-    return { eavesProfile, canopyProfile, terrain };
+    return { eavesProfile, canopyProfile, terrain, siteContext };
   }
 
   function applyUrlParams() {
@@ -1425,19 +1647,27 @@ function bindUI() {
       scene.background = state.baseBackground;
     }
     const view = p.get('view');
-    if (view) applyView(view);
     const ch = p.get('channel');
+    if (p.get('env') === '1') {
+      if (state.siteContext) buildEnv(state.siteContext, !view);
+      else warn('周边环境：未找到数据（data/site-context.json 内嵌副本缺失）');
+    }
+    if (view) applyView(view);
     if (ch) setChannel(ch);
   }
 
   async function build(json) {
+    const keepEnv = state.envOn;
+    const keepContext = state.siteContext;
     clearModel();
     state.drawingName = json.DrawingName || '';
     try {
       const extras = await resolveExtras();
       const { data, L } = buildModel(json, extras);
+      if (extras.siteContext) state.siteContext = extras.siteContext;
       state.modelBuilt = true;
       applyUrlParams();
+      if (keepEnv && state.siteContext && !state.envOn) buildEnv(state.siteContext);
       controls.update();
       renderer.render(scene, camera);   /* 立即渲染一帧，保证截图/首帧可见 */
       stats.innerHTML =
@@ -1485,6 +1715,7 @@ function bindUI() {
     chk_walls: 'walls', chk_slabs: 'slabs', chk_columns: 'columns',
     chk_roof: 'roof', chk_canopies: 'canopies', chk_stairs: 'stairs', chk_extra: 'extra',
     chk_ground: 'ground', chk_families: 'families', chk_annot: 'annot',
+    chk_terrain: 'terrain', chk_riverbed: 'riverBed', chk_water: 'riverWater', chk_envlines: 'envLines',
   };
   for (const id in chkMap) {
     const el = document.getElementById(id);
@@ -1538,6 +1769,41 @@ function bindUI() {
     });
   }
   renderScenePanel();
+
+  /* 周边环境（总平面图）：默认数据 = 页面内嵌副本 / data/site-context.json */
+  const envBtn = document.getElementById('envBtn');
+  const envFileBtn = document.getElementById('envFileBtn');
+  const envFileInput = document.getElementById('envFileInput');
+  const envClearBtn = document.getElementById('envClearBtn');
+  if (envBtn) {
+    envBtn.addEventListener('click', async () => {
+      let sc = state.siteContext;
+      if (!sc) {
+        sc = await resolveExtras().then(e => e.siteContext);
+        if (sc) state.siteContext = sc;
+      }
+      if (!sc) { showError('未找到周边环境数据（data/site-context.json 或页面内嵌副本）'); return; }
+      buildEnv(sc, true);
+    });
+  }
+  if (envFileBtn && envFileInput) {
+    envFileBtn.addEventListener('click', () => envFileInput.click());
+    envFileInput.addEventListener('change', () => {
+      const f = envFileInput.files[0];
+      if (!f) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          const sc = JSON.parse(reader.result);
+          state.siteContext = sc;
+          buildEnv(sc, true);
+        } catch (e) { showError('周边环境 JSON 解析失败：' + e.message); }
+      };
+      reader.onerror = () => showError('周边环境文件读取失败');
+      reader.readAsText(f, 'utf-8');
+    });
+  }
+  if (envClearBtn) envClearBtn.addEventListener('click', () => { clearEnv(); renderScenePanel(); renderer.render(scene, camera); });
 
   /* 默认尝试加载示例 JSON */
   (async function loadDefault() {

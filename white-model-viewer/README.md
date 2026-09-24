@@ -22,7 +22,8 @@
   - **线稿叠加（黑线通道）**：对主要构件按二面角阈值(30°)提取棱边黑线，素模/线稿一键切换
   - **门窗构件**：框/扇/玻璃等参数化族实例（当前为通用占位族，CAD 大样到位后替换）
   - **出图通道**：素模（彩色）/ 深度 depth / 法线 normal，供 AI 渲染条件图使用（见下文）
-  - **场景（视角镜头）**：8 个固定视角一键切换 + 自定义镜头保存/删除（见下文）
+  - **场景（视角镜头）**：10 个固定视角一键切换 + 自定义镜头保存/删除（见下文）
+  - **周边环境（总平面图）**：见下文「周边环境渲染」——载入 / 更换 / 清除场地数据，及地形面 / 河床面 / 水面 / 环境线四个显示开关
 
 ## 已实现的建模逻辑（对应 JSON 图元）
 
@@ -85,19 +86,21 @@ node tools/cdp-shot.mjs "http://localhost:8123/white-model-viewer/?static=1" out
 
 | 参数 | 作用 |
 | --- | --- |
+| `env=1` | 载入周边环境（地形面 / 河床面 / 水面，用内嵌副本，离线可用） |
 | `lines=1` | 出图含黑色线稿叠加 |
 | `annot=0` | 隐藏房间标注（文字 + 房间轮廓线），得到纯净条件图 |
 | `bg=ffffff` | 背景色（6 位 hex） |
 | `view=名字` | 应用视角预设（见下表），如 `?view=iso-ne` |
 | `channel=…` | 出图通道 `color` / `depth` / `normal`，如 `?channel=depth` |
 
-### 视角预设（10 个，按建筑包围盒自动推算，适配任意 JSON）
+### 视角预设（12 个，按建筑包围盒自动推算，适配任意 JSON）
 
 | 名称 | 内容 |
 | --- | --- |
 | `iso-ne / iso-nw / iso-se / iso-sw` | 四角鸟瞰 |
 | `elev-s / elev-n / elev-w / elev-e` | 南 / 北 / 西 / 东立面（正视） |
 | `persp-1 / persp-2` | 人视（室外地坪 + 1700mm 视高；自动裁掉地坪以下的基础/集水坑，画面如真实照片） |
+| `env-iso / env-river` | 周边鸟瞰（覆盖整个地形盒）/ 河道视角（河槽中心线上方 40 m 沿槽看下游）；**需先载入周边环境**，不套用人视裁剪面 |
 
 ### 场景（左侧面板「场景（视角镜头）」区域）
 
@@ -105,7 +108,7 @@ node tools/cdp-shot.mjs "http://localhost:8123/white-model-viewer/?static=1" out
 
 | 类型 | 内容 | 存储 |
 | --- | --- | --- |
-| 固定场景（8 个，不可删除） | 4 个正立面：南立面 / 北立面 / 西立面 / 东立面；4 个角部向下鸟瞰：东北 / 西北 / 东南 / 西南鸟瞰 | 不存储，由建筑包围盒实时推算（等价于 `?view=` 的 `elev-{s,n,w,e}` 与 `iso-{ne,nw,se,sw}`） |
+| 固定场景（10 个，不可删除） | 4 个正立面：南立面 / 北立面 / 西立面 / 东立面；4 个角部向下鸟瞰：东北 / 西北 / 东南 / 西南鸟瞰；2 个周边视角：周边鸟瞰 / 河道视角（**未载入周边环境时置灰**） | 不存储，由建筑包围盒（周边视角用地形盒）实时推算（等价于 `?view=` 的 `elev-{s,n,w,e}`、`iso-{ne,nw,se,sw}` 与 `env-iso/env-river`） |
 | 自定义场景（任意个） | 点击「＋ 存为当前镜头」，弹窗命名后保存当前镜头；点名称应用，点 `×` 删除 | 浏览器 localStorage，键 `wm.scenes.v1:<DrawingName>`，**每张 JSON 图纸独立一套**；localStorage 不可用时退化为会话内存 |
 
 出图脚本接口同样可用：`window.WMShot.scenes()` 读取（含存储键与自定义列表）、`WMShot.saveScene(name)`、
@@ -126,7 +129,7 @@ depth / normal 通道自动隐藏线稿与标注，与素模同一相机渲染�
 输出路径是目录（或加 `--` 开头参数）时进入批量模式，驱动页面内 `window.WMShot` 接口循环截图：
 
 ```bash
-# 全部 10 视角 × 3 通道 = 30 张 + manifest.json
+# 全部 12 视角 × 3 通道 = 36 张 + manifest.json
 node tools/cdp-shot.mjs "http://localhost:8123/white-model-viewer/?annot=0" 输出目录 --views=all --channels=color,depth,normal
 
 # 只出指定视角 / 通道
@@ -148,6 +151,18 @@ JSON.stringify(WMShot.familyCheck())   // → {"pieces":78,"offenders":0,"detail
 **必须为 0**；非 0 时 `detail` 给出洞口号、族名与实测 u/v/n 区间。
 样例基线：78 块 / 0 越界。规则与「左手基导致构件朝向退化」的成因见 docs/DATA-MODEL.md 5.2。
 
+### 周边环境几何自检（改了 js/environment.js 就跑到指标达标为止）
+
+```js
+// 页面 Console 直接执行；也可由 CDP 探针调用
+JSON.stringify(WMShot.envCheck())   // → {nanCount, slopeMax, spikeMaxMm, platform, hole, water, counts, …}
+```
+
+关键指标：`nanCount = 0`、`slopeMax ≤ 1.0`（1:1）、`spikeMaxMm ≤ 600`、
+`platform.devMaxMm = 0`（平台严格 = `L.grade − 300`）、`water.aboveLandCount = 0`（水面不越岸）。
+样例基线（v0.4.0，建筑 + 周边环境）：地形 13920 三角 / 河床 1794 / 水面 632 / 裙边 704，
+坡度最大 0.659、去刺残差 280 mm。参数含义、算法顺序与已知问题见 docs/DATA-MODEL.md 第 13 节。
+
 ## 文件结构
 
 ```text
@@ -156,10 +171,65 @@ white-model-viewer/
   js/white-model.js     JSON 解析 + 参数化建模 + 渲染
   js/families.js        门窗参数化族（通用占位，CAD 大样到位后替换几何）
   js/eaves.js           挑檐截面沿路径放样
-  js/terrain.js         地形 OBJ 导入 + 双控制点配准
+  js/environment.js     周边环境：高程点插值地形面 + 河床面 + 水面 + 环境线
+  js/terrain.js         地形 OBJ 导入 + 双控制点配准（未接线）
   lib/                  three.js r128 + OrbitControls（本地依赖）
   data/sample.json      示例 JSON
-  data/eaves-profile.json 挑檐默认占位截面
+  data/eaves-profile.json   挑檐默认占位截面
+  data/canopy-profile.json  雨篷默认占位截面
+  data/site-context.json    总平面图对位与环境数据（高程点 / 进水池 / 河道，见下节）
   tools/cdp-shot.mjs    CDP 无头截图脚本
   tools/dxf-profile.mjs DXF 截面几何提取
+  tools/dxf-site-context.mjs  总平面图 DXF → data/site-context.json（同时同步 index.html 内嵌副本）
+  tools/site-context-plot.mjs 对位校验图（自包含 HTML，用 cdp-shot 截图查看）
 ```
+
+（`data/elevation-profiles.json`、`data/facade-components.json` 为 `立面构件.dxf` 提取的备用素材，
+当前版本尚未被 buildModel 读取。）
+
+## 场地环境数据与周边环境渲染
+
+`data/site-context.json`（v2）把 `Flie/输入文件/菖蒲垇项目/总平面图.dxf` 里的场地信息换算到**模型坐标系（mm）**，
+查看器据此渲染建筑周边的地形 / 河床 / 水面。
+
+```bash
+cd white-model-viewer
+node tools/dxf-site-context.mjs     # 重新解析 DXF（图纸更新后执行），同时同步 index.html 内嵌副本，并打印一致性告警
+node tools/site-context-plot.mjs    # 生成对位校验图 HTML（默认写系统临时目录）
+node tools/cdp-shot.mjs "file:///<临时目录>/site-context-check.html" site-context.png 6
+```
+
+面板操作（左侧「周边环境（总平面图）」）：
+
+| 按钮 / 开关 | 作用 |
+| --- | --- |
+| **载入周边环境（默认数据）** | 用内嵌 `#siteContextData`（= `data/site-context.json` 副本）生成地形 / 河床 / 水面，并切到「周边鸟瞰」视角 |
+| **选择文件…** | 换用另一份 `site-context.json`（可用于其它项目） |
+| **清除** | 移除环境几何、恢复建筑视角 |
+| 显示控制：周边地形面 / 河道河床面 / 河道水面 / 环境线（岸线 / 轮廓） | 四个开关分别控制环境分组；「全选 / 取消」会一并切换 |
+
+出图用法（与 `?env=1` 等价，脚本接口还能中途载入）：
+
+```bash
+node tools/cdp-shot.mjs "file:///D:/Work/Project/20260828_Line_Cabin/white-model-viewer/index.html?env=1&annot=0&view=env-iso" out.png 8
+node tools/cdp-shot.mjs "file:///D:/Work/Project/20260828_Line_Cabin/white-model-viewer/index.html?env=1&annot=0" outdir --views=all --channels=color,depth,normal
+```
+
+脚本接口：`WMShot.env()`（`{on, stats}`）、`WMShot.loadEnv(sc?)`、`WMShot.clearEnv()`、`WMShot.envCheck()`（验收指标）。
+
+生成规则：地形面 = 578 个高程点 IDW 插值（去刺 + 拉普拉斯平滑 + 坡度约束），范围 = 建筑外墙 AABB 每侧外扩 60 m；
+河床面 = 主河槽（岸线 id 1 + id 2）内高程点插值、与地面取 min（不会冒出「假土包」）；两条主岸由图纸上多段
+首尾相接的 SXSS 折线端点拼接（容差 0.5 m），岸线沿北西延伸段穿出地形盒、河道在盒边自然截断；
+水面 = 河床 + 水深（默认 1000 mm，`environment.waterDepthMm` 可调）；
+场地平台面 = `L.grade − 300`（正好是散水底面），建筑外墙范围内挖空不出面；地块四周 3 m 裙边。
+算法顺序、默认值总表与假设见 `docs/DATA-MODEL.md` 第 13 节与第 5.5 节。
+
+内容：`alignment`（对位变换：平移 + 旋转 3.2962° + ×1000，锚点 = 建筑西南角 ↔ 模型 (0,0)）、
+`building`（外墙轮廓线与尺寸）、`elevationPoints`（578 个高程点，含总平面图 m 坐标与模型 mm 坐标）、
+`intakePool`（进水池轮廓与净距）、`riverChannel`（麻桑河岸线 + `mainChannel` 主河槽定义；一条岸可拆成多段
+折线首尾相接，生成器按端点 0.5 m 容差自动拼成整条，`segments` 字段记段数，闭合折线不参与拼接）、
+`environment`（环境渲染默认参数）、`context`（陡坎 / 管道 / 控制点 / 注记）、
+`consistency`（与当前模型的尺寸差异自检）。
+
+坐标与公式、图层约定、以及「总平面图与当前 JSON 版本不一致（长边差 2802.6 mm）」的说明见
+`docs/DATA-MODEL.md` 第 12 节。校验图判读要点：Y = 0 基准线同时穿过总平面图轮廓线与模型 AABB 的南边。
