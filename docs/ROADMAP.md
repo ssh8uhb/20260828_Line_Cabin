@@ -13,7 +13,7 @@
 | 2.1 | 多视角自动截图导出 | 无 | **已完成（v0.3.0）** |
 | 2.2 | depth / normal 通道导出 | 无 | **已完成（v0.3.0）** |
 | 3.1 | JSON → 白模批量出图（无界面） | 2.1 | 批量框架已就绪，剩任意 JSON 路径加载（?src=）与失败报错 |
-| 3.2 | 扩散模型联调（截图 + 提示词 → 效果图） | 2.x、3.1 | 未开始 |
+| 3.2 | 扩散模型联调（截图 + 提示词 → 效果图） | 2.x | **CLI 已就绪（见 §3.2），等真实 key 出图验收** |
 | 3.3 | Electron 打包 .exe | 3.1、3.2 | 未开始 |
 | 4.1 | 第二个样本回归验证 | 用户：其它项目的 JSON | 未开始 |
 | 4.2 | 未处理图元补齐 | 4.1 | 未开始 |
@@ -125,13 +125,27 @@
   页面已支持 `?static=1` 固定帧出图，适合批处理。
 - **验收标准**：给定一个 JSON 路径，一条命令产出完整素材目录；失败时有明确报错（缺图框/缺轴线等）。
 
-### 3.2 扩散模型联调（截图 + 提示词 → 效果图）
+### 3.2 扩散模型联调（截图 + 提示词 → 效果图） — ✅ CLI 与页面面板均已就绪
 
-- **目标**：把白模截图 + 外立面材质/风格提示词，通过扩散模型生成建筑效果图。
-- **方案对比（待定）**：本地部署（SD + ControlNet，需 GPU，可离线、可批量）vs 云 API（无需 GPU，
-  但需联网与计费）。产品要装到用户电脑上，若走本地部署需要评估用户显卡门槛；
-  **这条路线是产品可行性的关键决策点，先与用户确认再动手**。
-- **验收标准**：给定同一白模 + 不同提示词，输出风格可控、建筑几何不跑偏；同一输入可复现。
+- **决策（2026-09-25 已与用户确认）**：走**云 API**（阿里云百炼 / DashScope 同步图像接口），不做本地 GPU 部署；
+  模型默认 `qwen-image-3.0`（`data/ai-render.json` 一行可换 `qwen-image-3.0-pro` / `qwen-image-2.0-pro` /
+  `qwen-image-edit-plus` 等，是否支持 `size`/`n` 见 `tools/ai/dashscope.mjs` 的 `MODEL_CAPS`）。
+- **实现**：`tools/ai/dashscope.mjs`（调用层，Node 侧零依赖，CLI / 页面桥 / 未来 Electron 主进程共用同一份）+
+  两条入口：`tools/ai-render.mjs`（CLI，白模截图**复用** `tools/cdp-shot.mjs`）与
+  `tools/ai-bridge.mjs` + `js/ai-panel.js`（页面面板：页面自己截图 `WMShot.capture` → POST 给**只绑 127.0.0.1** 的本地桥 → 桥出图回图）；
+  提示词与默认参数在 `data/ai-render.json`（默认值总表见 docs/DATA-MODEL.md §5.7；页面面板读 index.html 里的内嵌副本）。
+- **用法**：
+  CLI — `node tools/ai-render.mjs --views=iso-ne`（默认 1 视角 × 素模单图，不加 `--yes` 会先打印付费调用次数并要求确认）；
+  `--channels=color,depth` 可加条件图（最多 3 张，顺序即图序）；`--dry-run` / `--mock` 零成本自检。
+  页面 — `node tools/ai-bridge.mjs` 起桥（`--mock` 可零成本），双击 `index.html`，在「AI 效果图」区域勾选视角、改提示词、点生成。
+- **输出**：`out/<时间戳>/{white,request,ai,run.json}`（页面桥为 `out/page-<时间戳>/`，run.json 记 `source`）——
+  模型 / 参数 / requestId / 输入输出 sha256 / 长宽比偏差 / 付费次数。
+- **验收标准**：效果图与白模构图一致（轮廓 / 体量 / 屋面 / 门窗数量与位置不变），材质灯光天空配景明显变化，
+  输出长宽比与输入偏差 ≤ 5%，`summary.paidCalls` 与实际调用次数一致；同一提示词 + `seed` 可复现。
+  提示词尾部的 `--ar W:H`（默认 `16:9`）会被剥出并折算成 `size`（`2048*1152`）。
+- **成本护栏**：CLI 非 TTY 必须 `--yes`；页面每次生成前弹 `confirm` 报出准确调用次数；桥 `--max-calls`（默认 12）限单会话调用数。
+- **暂缓**：① 异步接口（万相 `wanx2.1-imageedit`，`buildAsyncRequest()` 只留空位）；② 高清超分；
+  ③ 页面桥并入 Electron 主进程 IPC（打包后不再需要用户手动起 `node tools/ai-bridge.mjs`）。
 
 ### 3.3 Electron 打包 .exe
 

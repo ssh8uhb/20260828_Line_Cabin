@@ -13,8 +13,10 @@
 1. **无构建工具**：原生 JS + 本地 three.js r128，没有 npm / webpack / 打包步骤。除非用户明确要求，
    不要引入构建工具或依赖 CDN。
 2. **file:// 必须可用**：white-model-viewer/index.html 双击即可看到白模。示例 JSON、挑檐占位截面、
-   总平面图对位数据（site-context）均以 `<script type="application/json" id="...">` 内嵌在页面中。**新增外部素材时，必须同时在
-   页面内嵌一份占位数据**，否则离线打开会失效。
+   总平面图对位数据（site-context）、AI 出图默认值（ai-render）均以 `<script type="application/json" id="...">` 内嵌在页面中。
+   **新增外部素材时，必须同时在页面内嵌一份占位数据**，否则离线打开会失效。
+   （`data/ai-render.json` 是唯一「双份」特例：CLI 读这个文件、页面面板读内嵌副本 `#aiRenderData`，
+   因为它只影响 AI 出图区域、不参与建模；内嵌副本缺失时面板自动禁用，其余功能不受影响。）
 3. **单位统一 mm**；Z=0 = 水泵间地面（绝对标高 166759）。建筑坐标由三个图框按轴线 1 ∩ A 对齐。
 4. 不提交第三方参考仓库副本（pure-line-room/ 已在 .gitignore 排除），不提交仓库根目录的无关文件。
 5. 改任何一个构件的建模逻辑或默认数值时，**必须同步更新 docs/DATA-MODEL.md 的第 5 节默认值总表**；
@@ -30,10 +32,13 @@ white-model-viewer/     主交付物（白模查看器）
   js/eaves.js           挑檐截面沿路径放样
   js/environment.js     周边环境：地形面 / 河床面 / 水面（由高程点插值）
   js/siteworks.js       道路 / 护坡：总平面图 DLSS、DLSS-斜坡 图层
+  js/ai-panel.js        AI 效果图面板（视角勾选 / 提示词 / 出图进度，与本地桥通信）
   js/terrain.js         地形 OBJ 导入 + 双控制点配准（未接线）
   lib/                  three.js r128 + OrbitControls（本地依赖）
-  data/                 示例 JSON、挑檐截面、总平面图对位数据（site-context.json）
-  tools/                CDP 无头截图、DXF 截面提取、总平面图对位数据（site-context）生成与校验图
+  data/                 示例 JSON、挑檐截面、总平面图对位数据（site-context.json）、AI 出图默认值（ai-render.json）
+  tools/                CDP 无头截图、DXF 截面提取、总平面图对位数据（site-context）生成与校验图、
+                        AI 出图 CLI（ai-render.mjs）与本地桥（ai-bridge.mjs）、百炼调用层（ai/dashscope.mjs）
+  start-ai-bridge.cmd   双击起桥 + 打开页面（Windows 快捷入口；内容全 ASCII，cmd 对中文 .cmd 解析有坑）
 Flie/输入文件/           原始输入资料（JSON / JSON 说明 / DWG / DXF）
 docs/                   交接说明、路线图、数据模型、会话纪要
 ```
@@ -45,7 +50,8 @@ docs/                   交接说明、路线图、数据模型、会话纪要
 Set-Location white-model-viewer
 node --check js/white-model.js; node --check js/families.js
 node --check js/eaves.js; node --check js/terrain.js; node --check js/environment.js
-node --check js/siteworks.js
+node --check js/siteworks.js; node --check js/ai-panel.js
+node --check tools/ai-render.mjs; node --check tools/ai-bridge.mjs
 
 # 2) 渲染截图（需本机有 Chrome/Edge；输出到临时目录，不要提交进仓库）
 node tools/cdp-shot.mjs "file:///D:/Work/Project/20260828_Line_Cabin/white-model-viewer/index.html?static=1&lines=1" "$env:TEMP/wm-check.png" 8
@@ -60,6 +66,17 @@ node tools/cdp-shot.mjs "file:///D:/Work/Project/20260828_Line_Cabin/white-model
 # 4) 或起本地静态服务
 python -m http.server 8123 --directory D:/Work/Project/20260828_Line_Cabin
 #    → http://localhost:8123/white-model-viewer/
+
+# 5) AI 出图链路的零成本自检（不动 js/ 也建议跑；不发任何付费请求）
+node tools/ai-render.mjs --views=iso-ne,elev-s --dry-run
+node tools/ai-render.mjs --views=iso-ne --channels=color --mock
+#    真跑（计费、需要 DASHSCOPE_API_KEY）：node tools/ai-render.mjs --views=iso-ne --yes
+
+# 5b) 页面出图链路（改了 js/ai-panel.js、index.html 的面板、tools/ai-bridge.mjs 后必跑）
+#     终端 A：node tools/ai-bridge.mjs --mock          ← 零成本假接口，出图直接回显白模截图
+#     终端 B：node tools/cdp-shot.mjs "file:///D:/Work/Project/20260828_Line_Cabin/white-model-viewer/index.html?env=1&annot=0" "$env:TEMP/wm-ai.png" 8 --pre="(async()=>{window.confirm=()=>true;document.getElementById('ai_go').click();await new Promise(r=>setTimeout(r,15000));})()"
+#     判定：ai_stats 显示「已连接本地服务」，出图区域出现预览图与图注（视角 · 尺寸 · 长宽比偏差），
+#           out/page-<时间戳>/{white,request,ai,run.json} 四件套齐全，run.json 无任何 key 文本
 ```
 
 判定标准：截图非黑屏、门窗/屋面/楼梯齐全、页面统计栏数字与 JSON 一致

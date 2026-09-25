@@ -21,7 +21,7 @@ Blender 或其他建模软件**。
 第 1 段的前提是：JSON 由设计插件导出，字段有明确的业务含义（可解释、合理），只是缺少文档说明。
 因此遇到不确定字段时，**优先去问用户或对照 Flie/输入文件/PlanFundingDrawing_JSON说明.md，不要凭字段名猜**。
 
-## 2. 当前实现（v0.4.0）
+## 2. 当前实现（v0.4.0 + AI 出图，后者待发版）
 
 主交付物是 white-model-viewer/，一个不依赖任何构建工具、可双击打开的单页应用。
 
@@ -41,8 +41,9 @@ Blender 或其他建模软件**。
 | 场地环境数据（总平面图对位） | tools/dxf-site-context.mjs → data/site-context.json（v3） | 由 `总平面图.dxf` 解析出模型↔总平面图对位变换（平移+旋转 3.2962°+×1000）、578 个高程点、进水池、麻桑河岸线、陡坎与注记，以及场地轮廓（DLSS 里含建筑的那一圈）/ 道路（DLSS 整环）/ 护坡（DLSS-斜坡）折线，全部换算为模型 mm 坐标；生成时同步 index.html 内嵌副本（见 docs/DATA-MODEL.md 第 12 节） |
 | 周边环境渲染（地形/河床/水面） | js/environment.js + white-model.js 的 buildEnv() | 用高程点插值生成地形面（去刺/平滑/坡度约束）、按槽内点插值出河床面、河床 + 水深生成水面；外墙 AABB 每侧外扩 60 m、平台面 = `L.grade − 500`、建筑范围挖空、地块四周 3 m 裙边；面板「载入周边环境（默认数据）」或 `?env=1` 载入，`WMShot.envCheck()` 出验收指标（见 docs/DATA-MODEL.md 第 13 节） |
 | 道路 / 护坡 | js/siteworks.js + white-model.js 的 buildSite() | DLSS 整环只出一块实体：顶面在场地轮廓（`site` 多边形）内严格齐平室外地坪、轮廓外跟随地形（5 m 过渡带内平滑回室外地坪、整体抬离自然地面 50 mm）；护坡 = `DLSS-斜坡` 环（场地标高斜到河床）。**早先按三角形重心把 DLSS 面分成「场地」「道路」两个材质岛、各建一块实体，交界处两片重合立侧面会闪棋盘格斜纹带（2026-09-24 修复）；分岛后场地边界上又出现锯齿状明暗斜带，2026-09-25 按用户要求删除场地实体**；厚度统一 500 mm，面板 road/slope 两个开关，`WMShot.siteCheck()` 出验收指标（见 docs/DATA-MODEL.md 第 14 节） |
-| 出图模式 | applyUrlParams() + STATIC | ?static=1 渲染数帧后停住；?env=1 载入周边环境（地形/河床/水面/道路/护坡，用内嵌副本，离线可用）；?lines=1 带线稿；?annot=0 去标注；?view= 视角预设；?channel= 出图通道；?bg=RRGGBB 设背景 |
+| 出图模式 | applyUrlParams() + STATIC | ?static=1 渲染数帧后停住；?env=1 载入周边环境（地形/河床/水面/道路/护坡，用内嵌副本，离线可用）；?lines=1 带线稿；?annot=0 去标注；?ui=0 只留三维画面（隐藏面板/提示条/标高表，AI 出图的条件图必须加）；?view= 视角预设；?channel= 出图通道；?bg=RRGGBB 设背景 |
 | 离线可用 | index.html 内嵌 #sampleData / #eavesProfileData / #siteContextData | 双击 file:// 打开即可看到示例白模；周边环境与场地数据也是内嵌副本，`?env=1` 离线可用 |
+| AI 出图（阶段③） | tools/ai-render.mjs（CLI）+ tools/ai-bridge.mjs + js/ai-panel.js（页面面板）+ tools/ai/dashscope.mjs（调用层）+ data/ai-render.json | 白模截图 → **阿里云百炼同步图像接口**（默认 `qwen-image-3.0`，1~3 张参考图）→ 效果图 + `run.json`；两条入口共用同一调用层：CLI 复用 `cdp-shot` 截图，页面面板由页面自己截图（`WMShot.capture`）后 POST 给**只绑 127.0.0.1** 的本地桥；提示词与参数默认值在 `data/ai-render.json`（页面读内嵌副本，见 docs/DATA-MODEL.md §5.7）；API key 只从环境变量读、只在桥进程内存里，`--dry-run` / `--mock` 可零成本自检，CLI 非 TTY 要 `--yes`、页面弹窗确认调用次数、桥 `--max-calls` 限会话调用数；异步接口（万相）与高清超分未实现 |
 
 占位数据说明：门窗族是通用占位几何、挑檐是 500×150 平板占位截面、地形是周边环境（高程点插值生成，
 未接入三角网 OBJ）。管线已打通，等用户提供素材后替换即可，见 docs/ROADMAP.md。
@@ -62,7 +63,7 @@ Blender 或其他建模软件**。
           → buildLevels(data)    // 标高体系 L
           → 各构件建模，写入 9 个分组: walls/slabs/columns/roof/canopies/stairs/extra/families/annot
           → buildEdgeLines()     // 线稿叠加通道（默认隐藏）
-      → applyUrlParams(): 应用 ?env=1 / ?lines=1 / ?annot=0 / ?view= / ?channel= / ?bg=RRGGBB
+      → applyUrlParams(): 应用 ?env=1 / ?lines=1 / ?annot=0 / ?ui=0 / ?view= / ?channel= / ?bg=RRGGBB
       → buildEnv(sc): 周边环境（WMEnv.build → 地形/河床/水面/环境线 4 个分组），模型重建后自动重载
       → buildSite(sc): 道路/护坡（WMSite.build → road/slope 2 个分组），?env=1 时与 buildEnv 一起执行
   → 用户可拖入其它 JSON 文件重新构建
@@ -91,8 +92,46 @@ node white-model-viewer/tools/cdp-shot.mjs "file:///D:/Work/Project/20260828_Lin
 node white-model-viewer/tools/cdp-shot.mjs "file:///D:/Work/Project/20260828_Line_Cabin/white-model-viewer/index.html?env=1&annot=0" "$env:TEMP/wm-env-batch" --views=all --channels=color,depth,normal
 ```
 
+### AI 出图（阶段③：白模截图 + 提示词 → 效果图）
+
+```powershell
+# API key 只从环境变量读（key 不进仓库 / 不进 run.json / 不进页面）
+$env:DASHSCOPE_API_KEY = "sk-xxxx"
+
+# 零成本自检：出白模图 + 请求体记录 + run.json，不发请求、不需要 key
+node white-model-viewer/tools/ai-render.mjs --views=iso-ne,elev-s --dry-run
+node white-model-viewer/tools/ai-render.mjs --views=iso-ne --mock        # 本地假接口跑通全链路
+
+# 真出图（每次调用都计费；不加 --yes 先打印调用次数并要求确认）
+node white-model-viewer/tools/ai-render.mjs --views=persp-1                        # 默认 1 视角 × 素模单图
+node white-model-viewer/tools/ai-render.mjs --views=persp-1,persp-2 --channels=color,depth --yes
+```
+
+产物在 `white-model-viewer/out/<时间戳>/`（已 gitignore）：`white/`（白模图 + manifest）、`request/`（实际请求体，
+base64 换成文件指纹）、`ai/`（效果图）、`run.json`（模型 / 参数 / requestId / 输入输出 sha256 / 付费次数）。
+提示词与默认参数改 `white-model-viewer/data/ai-render.json`；页面面板读的是 `index.html` 里的内嵌副本
+`<script type="application/json" id="aiRenderData">`（file:// 离线可用），**改一处要同步另一处**。
+
+页面里出图（所见即所得，可渲自定义镜头）：
+
+```powershell
+# 最省事：双击 white-model-viewer\start-ai-bridge.cmd（起桥 + 自动打开页面；
+#         key 没设时会提示粘贴，也可预放 white-model-viewer\.dashscope-key，已 gitignore）
+# 手动等价命令：
+# 终端 A：起本地桥（只绑 127.0.0.1；页面直连百炼会被 CORS 拦，key 也必须留在 Node 侧）
+$env:DASHSCOPE_API_KEY = "sk-xxxx"; node white-model-viewer/tools/ai-bridge.mjs          # 默认 http://127.0.0.1:8787
+$env:DASHSCOPE_API_KEY = "sk-xxxx"; node white-model-viewer/tools/ai-bridge.mjs --mock   # 零成本：本地假接口，结果图直接回显白模截图
+# 终端 B / 直接双击：打开 white-model-viewer/index.html → 左侧面板「AI 效果图（阶段③）」
+#   勾选视角（12 个预设 + 自定义镜头，`看` 只切机位不入队）→ 改提示词 → 生成效果图（N 次调用）
+```
+
+桥的端点：`GET /health`、`GET /ai-render/config`（配置 + `keyPresent`，**不回传 key**）、`POST /ai-render`
+（`{view,label,hint,channels,images,prompt,doc}` → 出图落盘 → 返回结果图 URL）、`GET /ai-render/image/<id>`。
+产物在 `out/page-<时间戳>/`（run.json 里 `source:"page"`，另记页面 URL 与图纸名）。
+
 URL 参数：?static=1 固定视角出图（渲染 8 帧后停止）；?env=1 载入周边环境（默认数据，用页面内嵌副本，
-离线可用）；?lines=1 叠加黑色线稿；?annot=0 隐藏房间标注；
+离线可用）；?lines=1 叠加黑色线稿；?annot=0 隐藏房间标注；?ui=0 只留三维画面（隐藏左侧面板 / 底部提示条 /
+右下标高表；**AI 出图的条件图必须加**，否则模型会把面板文字一起画进效果图）；
 ?view=iso-ne 等切换 12 个视角预设（iso-ne/nw/se/sw、elev-s/n/w/e、persp-1/2、env-iso/env-river）；?channel=color/depth/normal
 切换出图通道；?bg=ffffff 背景色（6 位 hex）。人视视角（persp-*）自动用地坪裁剪面隐藏室外地坪以下的
 基础/集水坑；批量模式下 window.WMShot 驱动 live 页面，manifest.json 记录每张图的相机参数便于跨版本比对。
@@ -196,6 +235,15 @@ Lineart/Canny 条件时，清晰的棱边线能显著提高“几何不走形”
   （1.5 m 网格），河床面由槽内点插值、水面 = 河床 + 水深（默认 1 m）。因此**不能当作土方量或防洪依据**；
   平台（场地）外缘与总平面图东南侧「地面硬化」高程点存在 0.9 – 1.2 m 台阶，属两份图纸版本差。
   验收基线与已知问题见 docs/DATA-MODEL.md 第 13 节；道路 / 护坡见第 14 节。
+- **AI 出图是「提示词 + 参考图」，不是 ControlNet 强约束**：单次最多 3 张参考图（单图 ≤ 10 MB），
+  输出边长受模型限制在 512–2048，几何保真靠 `promptSuffix` 锁死 + 线稿 / 深度条件图，仍可能出现构件偏差；
+  出图 URL 官方只保留 24 小时，脚本拿到即立即下载。模型能力表与参数默认值见 docs/DATA-MODEL.md §5.7。
+  提示词尾部的 `--ar W:H` 由脚本剥出并折算成输出尺寸（默认 `16:9` → `2048*1152`），不属于提示词正文。
+- **页面出图的本地桥是「本机工具」**：`tools/ai-bridge.mjs` 只绑 `127.0.0.1`、不带鉴权，绝不要绑 `0.0.0.0`
+  或做端口转发；key 只在桥进程内存里，页面拿不到（`/ai-render/config` 只回 `keyPresent`）。
+  打包成 .exe 后应把它并进 Electron 主进程 IPC，不再要求用户手动起 Node。
+- **页面出图只支持已加载的单个模型**：面板截图取的是页面当前相机与当前场景（含自定义镜头），
+  但不能像 CLI 那样换 JSON 批量跑（`?src=` 见 ROADMAP 3.1，尚未实现）。
 
 ## 8. 素材现状与交付规格
 
@@ -232,6 +280,9 @@ Lineart/Canny 条件时，清晰的棱边线能显著提高“几何不走形”
 
 ## 11. 下一步
 
-见 docs/ROADMAP.md：周边环境建模（1.4，数据已就绪）/ 素材替换三件套 → JSON→白模批处理补齐（?src= 任意路径加载）
-→ 扩散模型联调 → Electron 打包 .exe。
-动手做周边环境前先确认总平面图与模型 JSON 的版本差异（§5、§7）。
+见 docs/ROADMAP.md：① **AI 出图（3.2）**—— CLI 与页面面板均已就绪（零成本 `--dry-run` / `--mock` 自检通过），
+下一步用真实 key 出一次图并验收（`node white-model-viewer/tools/ai-render.mjs --views=iso-ne --yes`，
+或起 `tools/ai-bridge.mjs` 后在页面里生成），验收通过后再打 tag；
+② 高清超分（输出边长上限 2048）；③ 异步接口（万相 `wanx2.1-imageedit`）；④ JSON→白模批处理补齐
+（3.1：`?src=` 任意路径加载）；⑤ Electron 打包 .exe（3.3，同时把本地桥并进主进程 IPC）。素材替换三件套（挑檐 / 门窗 / 地形）仍等用户提供素材。
+总平面图与模型 JSON 的版本差异（§5、§7）需用户按新图重新导出 PlanFundingDrawing JSON 后才收敛。

@@ -271,6 +271,49 @@ JSON.stringify(WMShot.familyCheck())   // → {"pieces":78,"offenders":0,"detail
 | `triMaxMm` / `triMaxRounds` | 2000 / 7 | 顶面三角细分目标边长 / 细分轮数上限（长边中点细分，公共边不裂） |
 | `wallInsetMm` | 50 | 挖空（建筑外墙 AABB）向内收的量：让实体伸进墙体内部，避免与墙面共面闪烁 |
 
+### 5.7 AI 出图（tools/ai-render.mjs / tools/ai-bridge.mjs + data/ai-render.json）
+
+阶段③「白模截图 + 提示词 → 效果图」的参数默认值以 **`white-model-viewer/data/ai-render.json`** 为单一事实源，
+命令行参数逐项覆盖（CLI：`tools/ai-render.mjs`；页面：`tools/ai-bridge.mjs` + `js/ai-panel.js`）。
+**两条读取路径**：
+
+- **CLI** 直接读该文件（Node 侧）；
+- **页面面板**读 `index.html` 里内嵌的 `<script type="application/json" id="aiRenderData">` 副本
+  （`js/ai-panel.js` 解析，file:// 离线可用）。该副本只带**面板离线需要的字段**：`bridge` / `provider` / `model` /
+  `captureSize` / `views` / `channels` / `prompt` / `promptSuffix` / `imageRoles` / `viewHints` / `viewLabels`；
+  `baseUrl` / `endpoint` / `apiKeyEnv` 与请求参数（`size` / `n` / `seed` / `promptExtend` / `watermark`）页面不需要，
+  一律以桥的 `GET /ai-render/config` 为准。**两边共有的字段改一处要同步另一处**；
+  页面经本地桥 `http://127.0.0.1:8787` 把题图与提示词 POST 给 `tools/ai-bridge.mjs`，**页面侧没有 key**。
+
+改这里不需要动建模几何，也就不影响第 5 节其它小节。
+
+| 参数 | 默认 | 含义 |
+| --- | --- | --- |
+| `provider` / `baseUrl` / `endpoint` | `dashscope` / `https://dashscope.aliyuncs.com` / `/api/v1/services/aigc/multimodal-generation/generation` | 阿里云百炼**同步**图像接口（Qwen-Image 系列；异步的万相 `wanx2.1-imageedit` 只在 `tools/ai/dashscope.mjs` 留了 `buildAsyncRequest()` 空位，未实现）。模型报「不存在」时改用业务空间域名 `https://<WorkspaceId>.cn-beijing.maas.aliyuncs.com`（`--base-url=`，见 README 限制④） |
+| `model` | `qwen-image-3.0` | 模型名；能力表见 `tools/ai/dashscope.mjs` 的 `MODEL_CAPS`（是否接受 `size`/`n`、最多几张参考图）。未知模型按最保守假设（不收 size/n、1 张图）并告警 |
+| `apiKeyEnv` | `DASHSCOPE_API_KEY` | API key 的环境变量名（桥另有 `--key-env`/`--key`）。**key 不进仓库、不进 run.json、不进页面**，日志只打前 3 位 |
+| `page` / `query` | `index.html` / `env=1&annot=0&lines=1&ui=0` | **仅 CLI 用**：白模截图用的页面与查询串（相对 `white-model-viewer/`）；`lines=1` 加强棱边、`annot=0` 去标注、`env=1` 带周边环境、`ui=0` 隐藏左侧面板与提示条（**必须**：cdp-shot 截的是整个视口，带面板会让模型把 UI 也画进效果图）。页面面板不需要它——截图由页面自己出（`WMShot.capture`，只截 canvas），且取当前相机与当前场景开关 |
+| `views` / `channels` | `["iso-ne"]` / `["color"]` | 默认只出 1 视角 1 通道（**每次调用都计费**）。`channels` 同时是「截哪些通道」与「送哪几张条件图」，顺序即 `content` 顺序（图 0 带视角提示词），最多 3 个（受 `MODEL_CAPS.maxImages` 约束）。页面面板是首次打开时的勾选默认值，用户可当场改 |
+| `imageRoles` | 见文件 | 提示词里图序说明的用词（color / depth / normal 各自的角色名） |
+| `viewHints` | `elev-` / `iso-` / `persp-` / `env-` 前缀 | 视角类型提示（正交正视立面 / 俯视鸟瞰 / 地面人视 / 无人机视角），按**名前缀**匹配，只作用于第 1 张图 |
+| `viewLabels` | 见文件 | 12 个预设视角的中文名（页面勾选列表与结果图注都用它；CLI 用 `key`） |
+| `bridge` | `{ "host": "127.0.0.1", "port": 8787 }` | 页面面板要连的本地桥地址。**只绑 127.0.0.1**，桥不带鉴权，别改成 0.0.0.0 或转发到公网 |
+| `captureSize` | `1600*900` | 页面截图（`WMShot.capture`）的画布尺寸；CLI 不用，它按 `size` 反推 |
+| `prompt` | 河边提灌站鸟瞰效果图提示词（英文，句尾带 `--ar 16:9`） | 用户提示词主体；页面文本框的默认值。`--ar W:H` 会在发请求前被 `parseAspectFlag()` **摘掉**并折算成 `size`（长边顶到 2048：16:9 → `2048*1152`），理由见 README「提示词里的 `--ar`」 |
+| `promptSuffix` | 锁几何那一段 | 固定后缀：只改材质/灯光/天空/配景，不改几何、不增删构件、不动相机 |
+| `size` | `auto` | `auto` = 先看提示词里的 `--ar W:H`，没有就按输入素模图长宽比吸附到合法档位（边长 512–2048、长宽比 ≤8:1、面积 ≥512²）；也可写死 `W*H`（**星号**分隔）。求不出合法值或模型不收 size 时为 `null`（交给模型自己定） |
+| `negativePrompt` | `""` | 传空串时不带 `negative_prompt` 字段 |
+| `n` / `seed` / `promptExtend` / `watermark` | `1` / `null` / `true` / `false` | 直接透传；`n` 必须是整数（传字符串官方会报 400） |
+| `waitSeconds` | 8 | **仅 CLI 用**：交给 `tools/cdp-shot.mjs` 的页面等待秒数（页面面板截图是同步的，无需等待） |
+| `timeoutSec` | 180 | 单次出图请求超时。**超时不重试**（可能已计费），只在 run.json 里记「可能已计费」 |
+| `retries` | 1 | 仅对「限流 / 5xx」重试的次数（每次重试都可能是新的计费调用） |
+| `intervalMs` | 1500 | 视角之间的间隔，降低触发限流的概率 |
+
+出图与验收流程、输出目录结构（`white/` + `request/` + `ai/` + `run.json`）、桥的接口表见
+`white-model-viewer/README.md`「AI 效果图」一节；接口事实（请求体、24 小时 URL、10 MB 上限）见该节与
+`tools/ai/dashscope.mjs` 文件头注释。两条链路的成本护栏：CLI 非 TTY 必须 `--yes`、`--dry-run`/`--mock` 零成本；
+页面每次生成前弹 `confirm` 报出准确调用次数；桥有 `--max-calls`（默认 12）会话上限。
+
 ## 6. 已解析但当前未建模的字段
 
 | 字段 | 来源 | 状态 |
@@ -630,6 +673,11 @@ node tools/cdp-shot.mjs "file:///.../index.html?env=1&annot=0" "$env:TEMP/wm-sit
 - 新增外部素材（挑檐截面 / 雨篷截面 / 地形）：既要放 `data/` 下的文件，也要在 index.html 内嵌同样内容的
   `<script type="application/json" id="...">` 占位，否则 file:// 打开会缺数据（`site-context.json` 的内嵌副本
   由 `tools/dxf-site-context.mjs` 自动写回，不要手改）。
+- 改 AI 出图的提示词 / 默认参数：改 `data/ai-render.json`（CLI 读它）**并同步 index.html 内嵌的 `#aiRenderData` 副本**
+  （页面面板读它）。两处**共有的字段必须一致**（`prompt` / `promptSuffix` / `views` / `channels` / `viewLabels` /
+  `viewHints` / `imageRoles` / `bridge` / `captureSize` / `model`）；请求参数与接口地址只在文件里，页面以桥的
+  `/ai-render/config` 为准。改完跑 AGENTS.md 的自检第 5 / 5b 条（`--dry-run` / `--mock` 零成本）。
+  新增视角预设要同步 `data/ai-render.json` 的 `viewLabels`、内嵌副本与 `viewHints` 前缀规则。
 - 改周边环境算法或参数：改 `js/environment.js`，同步本文件 5.5 / 13 节与 `tools/dxf-site-context.mjs` 的
   `ENVIRONMENT_PARAMS`（两处默认值必须一致），并重跑生成器刷新数据文件与内嵌副本。
 - 改道路 / 护坡算法或参数：改 `js/siteworks.js`，同步本文件 5.6 / 14 节与生成器的 `SITEWORKS_PARAMS`

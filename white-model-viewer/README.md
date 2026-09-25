@@ -23,6 +23,7 @@
   - **门窗构件**：框/扇/玻璃等参数化族实例（当前为通用占位族，CAD 大样到位后替换）
   - **出图通道**：素模（彩色）/ 深度 depth / 法线 normal，供 AI 渲染条件图使用（见下文）
   - **场景（视角镜头）**：10 个固定视角一键切换 + 自定义镜头保存/删除（见下文）
+  - **AI 效果图（阶段③）**：勾选机位 + 提示词 → 本地桥 → 百炼出效果图（需先起 `tools/ai-bridge.mjs`，见下文）
   - **周边环境（总平面图）**：见下文「周边环境渲染」——载入 / 更换 / 清除场地数据，及地形面 / 河床面 / 水面 / 道路 / 护坡 / 环境线六个显示开关
 
 ## 已实现的建模逻辑（对应 JSON 图元）
@@ -89,6 +90,7 @@ node tools/cdp-shot.mjs "http://localhost:8123/white-model-viewer/?static=1" out
 | `env=1` | 载入周边环境（地形面 / 河床面 / 水面 / 道路 / 护坡，用内嵌副本，离线可用） |
 | `lines=1` | 出图含黑色线稿叠加 |
 | `annot=0` | 隐藏房间标注（文字 + 房间轮廓线），得到纯净条件图 |
+| `ui=0` | 只留三维画面：隐藏左侧面板、底部提示条与右下标高表（**AI 出图条件图必加**，否则模型会把面板文字画进效果图） |
 | `bg=ffffff` | 背景色（6 位 hex） |
 | `view=名字` | 应用视角预设（见下表），如 `?view=iso-ne` |
 | `channel=…` | 出图通道 `color` / `depth` / `normal`，如 `?channel=depth` |
@@ -177,6 +179,100 @@ JSON.stringify(WMShot.siteCheck())   // → {ok, issues, flatDevMm, roadSeamDevM
 落差 3879 mm）、`roadRaiseMm` [50, 953]。
 参数含义、算法与已知问题见 docs/DATA-MODEL.md 第 14 节。
 
+## AI 效果图（阶段③：白模截图 + 提示词 → 效果图）
+
+把上面的静态出图能力接到**阿里云百炼（DashScope）同步图像接口**：出白模截图 → 带提示词送模型 → 下载效果图。
+两种用法共用同一份调用层 `tools/ai/dashscope.mjs`（Node 侧零依赖）：
+**① 页面面板**（`tools/ai-bridge.mjs` 本地桥 + 页面「AI 效果图」区域，所见即所得、可渲自定义镜头）；
+**② 命令行**（`tools/ai-render.mjs`，批量、可脚本化、run.json 可追溯）。
+
+```bash
+# 1) 设置 API key（只从环境变量读；key 不进仓库、不进 run.json、不进页面）
+#    PowerShell:  $env:DASHSCOPE_API_KEY="sk-xxxx"       CMD:  set DASHSCOPE_API_KEY=sk-xxxx
+
+# 2) 零成本自检：只出白模图 + 请求体记录 + run.json，不发任何请求、不需要 key
+node tools/ai-render.mjs --views=iso-ne,elev-s --dry-run
+node tools/ai-render.mjs --views=iso-ne --mock        # 本地假接口，跑通「调用→下载→落盘」全链路
+
+# 3) 真出图（每次调用都计费；不加 --yes 会先打印调用次数并要求确认）
+node tools/ai-render.mjs --views=iso-ne                        # 默认：1 视角 × 素模单图（iso-ne = 东北鸟瞰）
+node tools/ai-render.mjs --views=persp-1,persp-2,iso-ne --channels=color,depth --yes
+```
+
+### 页面里出图（推荐给人看/调风格）
+
+最省事的方式：**双击 `start-ai-bridge.cmd`** —— 它会起桥并自动打开白模页面（带 `?env=1`）。
+key 没设时会提示粘贴（只留在这个窗口的内存里）；想彻底免输入，就在 `white-model-viewer/` 下建一个
+`.dashscope-key` 文件、第一行写 key（已在 `.gitignore` 里，不会被提交）。关掉那个窗口即停止服务。
+
+也可以手动起（等价）：
+
+```bash
+# 终端 A：起本地桥（只绑 127.0.0.1；页面直连百炼会被 CORS 拦，且 key 必须留在 Node 侧）
+$env:DASHSCOPE_API_KEY="sk-xxxx"; node tools/ai-bridge.mjs            # 默认 http://127.0.0.1:8787
+$env:DASHSCOPE_API_KEY="sk-xxxx"; node tools/ai-bridge.mjs --mock     # 零成本：本地假接口，出图直接回显白模截图
+# 终端 B / 双击页面：打开 white-model-viewer/index.html（页面面板截图走 canvas，不带面板；CLI 的 ?ui=0 同效）
+```
+
+面板「AI 效果图（阶段③）」区域：勾选要渲染的视角（12 个预设 + 自定义镜头，`看` 按钮只切机位不入队）→
+改提示词（`恢复默认提示词` 从页面内嵌的 `#aiRenderData`——`data/ai-render.json` 的副本——读回）→
+`生成效果图（N 次调用）`（弹窗确认后逐张发起）。
+页面**自己截图**（`WMShot.capture`，默认 1600×900，逐通道导出 dataURL）后 POST 给本地桥，桥调用百炼、落盘、回图。
+未启动桥时按钮置灰并显示启动命令；桥没读到 key 时提示环境变量名。
+
+| 端点 | 作用 |
+| --- | --- |
+| `GET /ai-render/config` | 配置 + `keyPresent`（**不回传 key**）+ 本会话已用调用数 |
+| `POST /ai-render` | `{view,label,hint,channels,images:{color:dataURL,…},prompt,doc}` → 出图落盘 → 返回结果图 URL |
+| `GET /ai-render/image/<id>` | 结果图 PNG（id 由桥签发，不接受路径） |
+
+桥的安全与成本约定：只绑 `127.0.0.1`；key 只在桥进程内存里；CORS 只放行本地页面；
+`--max-calls=N`（默认 12）限制**单次桥会话**的付费调用数；出图产物落在 `out/page-<时间戳>/`（同 CLI 的四件套）。
+
+输出目录（默认 `out/<年月日-时分秒>/`，页面桥为 `out/page-<年月日-时分秒>/`，都在 `.gitignore` 里）：
+
+| 文件 | 内容 |
+| --- | --- |
+| `white/<视角>-<通道>.png` + `manifest.json` | 白模截图（CLI 走 `tools/cdp-shot.mjs`，相机参数在 manifest 里；页面桥走页面内截图） |
+| `request/<视角>.json` | **实际请求体**记录（图片 base64 换成文件指纹 `{file,bytes,sha256,size}`），可复现、不含 key |
+| `ai/<视角>-ai.png` | 效果图（`--n > 1` 时为 `-ai1.png` / `-ai2.png`…） |
+| `run.json` | 模型 / 参数 / 每次调用的 requestId / 输入与输出 sha256 / 长宽比偏差 / 付费调用次数（桥另有 `source:"page"`） |
+
+参数与提示词默认值在 `data/ai-render.json`（命令行逐项覆盖，含义见 `docs/DATA-MODEL.md` 第 5.7 节）：
+
+| 常用参数 | 说明 |
+| --- | --- |
+| `prompt` / `promptSuffix` | 提示词主体 / 固定后缀（只改材质灯光配景、锁死几何与构图） |
+| `prompt` 里的 `--ar W:H` | Midjourney 风格画幅标记：**从正文里剥掉**，`size=auto` 时按它换算输出尺寸（如 `--ar 16:9` → `2048*1152`） |
+| `views` / `channels` | 默认 `["iso-ne"]` / `["color"]`；`channels` 最多 3 个，同时决定**截哪些通道**与**送哪几张条件图**（顺序即图序，第 1 张带视角提示词） |
+| `model` | 默认 `qwen-image-3.0`；同族可换 `qwen-image-3.0-pro` / `qwen-image-2.0-pro` / `qwen-image-edit-plus`（是否支持 `size`/`n` 见 `tools/ai/dashscope.mjs` 的 `MODEL_CAPS`） |
+| `size` | `auto`（默认，按输入图长宽比吸附到 512–2048 的合法档位）或显式 `W*H`（星号分隔；总面积需在 512²–2048² 之间、长宽比 1:8–8:1） |
+| `bridge` / `captureSize` | 页面桥的 `host:port` / 页面内截图尺寸（默认 `127.0.0.1:8787` / `1600*900`，页面内嵌副本里的同名值要一起改） |
+| `page` / `query` | CLI 截图用的页面与查询串：默认 `index.html?env=1&annot=0&lines=1&ui=0`。**`ui=0` 不能去掉**——cdp-shot 截的是整个视口，带面板会被模型画进效果图（页面面板走 canvas 截图，不受影响）；用 `--page=` 换页面时也要带上 |
+
+命令行：`--views=`（名字或 `all`）、`--channels=color[,depth,normal]`、`--prompt=` / `--prompts=<file.json>`（按视角覆盖）、
+`--model=`、`--base-url=`（业务空间域名）、`--size=`、`--n=`、`--seed=`、`--negative=`、`--out=DIR`、`--page=` / `--url=`、
+`--shots=DIR`（复用已出的白模图）、`--skip-shots`、`--wait=`、`--timeout=`、`--retries=`、`--interval=`、
+`--key-env=` / `--key=`、`--dry-run`、`--mock[=401|429|500]`、`--yes`。
+桥的命令行：`--port=`、`--host=`、`--out=DIR`、`--model=`、`--base-url=`、`--max-calls=N`、`--mock`。
+
+成本与安全约定：**默认只出 1 张**；不加 `--yes`（CLI）或不在页面弹窗确认时不会发起调用；超时**不自动重试**
+（可能已计费），只有限流 / 5xx 才重试；结果图 URL 官方只保留 24 小时，脚本**拿到就立即下载**，
+失败时把 URL 记进 `run.json` 供手动补救。
+
+验收判据（首次联调）：`ai/<视角>-ai.png` 生成成功、长宽比与输入偏差 ≤ 5%，**建筑轮廓 / 体量 / 屋面形状 /
+门窗数量与位置与白模一致**，材质灯光天空配景明显变化；`run.json` 的 `summary.paidCalls` 等于实际调用次数。
+目视比对可用本机识图脚本，例如：
+
+```bash
+node C:/Users/lenovo/.codex/skills/claude-vision-skill/vision.js out/<ts>/ai/iso-ne-ai.png "与 out/<ts>/white/iso-ne-color.png 对比：建筑轮廓、屋面形状、门窗数量与位置是否一致？只列差异"
+```
+
+已知限制：① 单次最多 3 张参考图、单图 ≤ 10 MB；② 输出边长受模型限制在 512–2048（要更高清需二次超分）；
+③ 几何保真靠提示词与线稿/depth 条件图，不是严格的 ControlNet 约束；④ 当前只能渲页面默认加载的样例 JSON
+（`?src=` 任意路径加载属 ROADMAP 3.1，尚未实现，`--json=` 会明确报错）；
+⑤ 页面桥是**本机工具**：只绑 127.0.0.1、不带鉴权，别绑到 0.0.0.0 或转发到公网。
+
 ## 文件结构
 
 ```text
@@ -188,12 +284,18 @@ white-model-viewer/
   js/environment.js     周边环境：高程点插值地形面 + 河床面 + 水面 + 环境线
   js/siteworks.js       道路 / 护坡：总平面图 DLSS、DLSS-斜坡 图层
   js/terrain.js         地形 OBJ 导入 + 双控制点配准（未接线）
+  js/ai-panel.js        AI 效果图面板（视角勾选 / 提示词 / 出图进度与预览，与 tools/ai-bridge.mjs 通信）
   lib/                  three.js r128 + OrbitControls（本地依赖）
   data/sample.json      示例 JSON
   data/eaves-profile.json   挑檐默认占位截面
   data/canopy-profile.json  雨篷默认占位截面
   data/site-context.json    总平面图对位与环境数据（高程点 / 进水池 / 河道 / 场地轮廓 / 道路 / 护坡，见下节）
+  data/ai-render.json   AI 出图的提示词与默认参数（Node 侧读取；页面面板读 index.html 里的内嵌副本，改一处要同步另一处）
   tools/cdp-shot.mjs    CDP 无头截图脚本
+  tools/ai-render.mjs   AI 出图 CLI（白模截图 → 百炼图像接口 → 效果图 + run.json）
+  tools/ai-bridge.mjs   AI 出图本地桥（页面 → 百炼，只绑 127.0.0.1，key 只留在 Node 侧）
+  start-ai-bridge.cmd   双击起桥 + 自动打开页面（Windows 快捷入口；key 缺失时会提示粘贴）
+  tools/ai/dashscope.mjs 百炼同步接口调用层（请求体 / 提示词 / 调用 / 错误分类 / 下载 / mock，零依赖）
   tools/dxf-profile.mjs DXF 截面几何提取
   tools/dxf-site-context.mjs  总平面图 DXF → data/site-context.json（同时同步 index.html 内嵌副本）
   tools/site-context-plot.mjs 对位校验图（自包含 HTML，用 cdp-shot 截图查看）
