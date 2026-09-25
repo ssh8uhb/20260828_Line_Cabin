@@ -217,7 +217,7 @@ Lineart/Canny 条件时，清晰的棱边线能显著提高“几何不走形”
 | v0.1.0 | e6c8857 | 白模查看器首版：JSON → Three.js 参数化白模、离线双击可用、CDP 截图脚本 |
 | — | 6d1b253 | 上传输入文件（JSON / JSON 说明 / DWG / DXF / 解析结果） |
 | v0.2.0 | 5867b3a | 线稿通道、门窗参数化族、挑檐截面放样 + DXF 提取工具、地形导入 |
-| v0.3.0 | e9e43ab…273d642（未打 tag） | 多视角预设（10）+ depth/normal 出图通道 + 批量出图（WMShot / cdp-shot 批量模式）+ 人视地坪裁剪 + ?annot=0 + 场景面板（8 固定场景 + 按图纸持久化的自定义镜头）+ 修复西/北墙窗框横穿墙厚凸出墙面（addPiece 左手基退化 + 双向门内侧把手越界）+ 门窗族几何自检 `WMShot.familyCheck()` |
+| v0.3.0 | e9e43ab…273d642（tag `v0.3.0`，2026-09-25 补打） | 多视角预设（10）+ depth/normal 出图通道 + 批量出图（WMShot / cdp-shot 批量模式）+ 人视地坪裁剪 + ?annot=0 + 场景面板（8 固定场景 + 按图纸持久化的自定义镜头）+ 修复西/北墙窗框横穿墙厚凸出墙面（addPiece 左手基退化 + 双向门内侧把手越界）+ 门窗族几何自检 `WMShot.familyCheck()` |
 | v0.4.0 | 2026-09-25（tag `v0.4.0`） | 周边环境渲染：`js/environment.js`（高程点插值地形面 + 河床面 + 水面，去刺/平滑/坡度约束/平台挖空）、`?env=1` 与面板「载入周边环境（默认数据）」、env-iso / env-river 两个视角预设（共 12 个）、4 个显示控制复选框、`WMShot.env()/loadEnv()/clearEnv()/envCheck()`、site-context v2（`mainChannel` + `environment` 参数块，生成时同步内嵌副本）、河床/水面材质边界藏到水位之下（`bedUnderMm`，修掉 1.5 m 网格量化的阶梯色块）；<br>道路 / 护坡：`js/siteworks.js`（总平面图 `DLSS` / `DLSS-斜坡` 图层，整环只出一块实体）、`WMShot.site()/loadSite()/clearSite()/siteCheck()`、site-context v3（`site` / `roads` / `slopes` / `siteWorks`）、删除原「地面 / 散水」实体、**修掉场地与道路各建实体时交界处的棋盘格斜纹带**、**修掉护坡几何从未进场景的 bug**（`buildSlab` 的几何在 `regions[0].geo`，原先误取 `slab.geo` → 恒为 undefined）、**按用户要求删除场地实体**（分岛后场地边界闪锯齿状明暗斜带；DLSS 面改为整环一块实体、材质 `road`，面板只剩 road / slope 两个开关） |
 
 提交信息格式：`<type>: <中文说明>`；里程碑同时打 tag 并推送。
