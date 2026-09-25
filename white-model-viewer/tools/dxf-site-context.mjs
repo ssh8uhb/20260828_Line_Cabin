@@ -9,12 +9,17 @@
  *   WALL_OUT 较小矩形 = 进水池轮廓
  *   GCD / 块 gc200 的 ATTRIB height = 高程点（图面单位 m，模型单位 mm，1:1000）
  *   SXSS = 河道岸线；DMTZ = 陡坎；ZJ = 河名文字
+ *   DLSS = 场地与道路轮廓；DLSS-斜坡 = 场地到河床的混凝土护坡范围
  * 输出内容: 对位变换（双向）、建筑轮廓、高程点（双坐标）、进水池、河道（含主河槽标识）、
- *          现场环境生成参数（environment，供 js/environment.js 读取）、陡坎、注记文字
+ *          场地/道路/护坡轮廓（供 js/siteworks.js 读取）、现场环境生成参数（environment）、陡坎、注记文字
  *
  * v2 起：写出的 JSON 会同步一份紧凑副本到 index.html 的 <script id="siteContextData">，
  *         因为 file:// 下浏览器会拦截 fetch/XHR，双击打开只能走内嵌副本。
  *         environment 各参数默认值与 white-model-viewer/js/environment.js 的 DEFAULT_PARAMS 一致。
+ * v3 起：解析 DLSS 层。2026-09-24 版图纸里 DLSS 的 7 条多段线都没勾闭合标志，但端点首尾相接
+ *         （容差 150 mm），能串成一条通路；按「闭合后含着建筑物的那一圈 = 场地」切开，
+ *         再把 场地 东南角的路口用封口线补上，就得到 场地 与 道路 两块闭合区域。
+ *         DLSS-斜坡 是首尾点重合的闭合环，首尾连线正好落在场地西边界上 = 护坡坡顶线。
  */
 import { readFileSync, writeFileSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -99,6 +104,7 @@ function polylineLenM(pts) {
 
 /* ---------------- 采集图元 ---------------- */
 const wallOut = [], sxss = [], dmtz = [], pipes = [], elevPts = [], ctrlPts = [], texts = [];
+const dlssRaw = [], slopeRaw = [];
 const TEXT_LAYERS = new Set(['ZJ', 'YHG_文字', 'DIM_COOR', 'DIM_ELEV', 'DIM_LEAD', 'YHJ_剖面_梁板', 'zdh']);
 for (let i = 0; i < sec.length; i++) {
   const e = sec[i];
@@ -110,6 +116,8 @@ for (let i = 0; i < sec.length; i++) {
     if (layer === 'WALL_OUT') wallOut.push(shape);
     else if (layer === 'SXSS') sxss.push(shape);
     else if (layer === 'DMTZ') dmtz.push(shape);
+    else if (layer === 'DLSS') dlssRaw.push(shape);
+    else if (layer === 'DLSS-斜坡') slopeRaw.push(shape);
     else if (layer === '管') pipes.push(shape);
   } else if (e.type === 'INSERT' && str(e.pairs, 2) === 'gc200') {
     const h = sec[i + 1] && sec[i + 1].type === 'ATTRIB' ? num(sec[i + 1].pairs, 1) : NaN;
@@ -161,6 +169,130 @@ const poolBox = {
 // 对位残差：外墙轮廓线四角与理想矩形四角的偏差（图纸本身非严格正交，量级 mm）
 const corners = [[0, 0], [bldSizeMm.width, 0], [bldSizeMm.width, bldSizeMm.length], [0, bldSizeMm.length]];
 const residIdeal = bldMm.map(p => Math.min(...corners.map(c => Math.hypot(p[0] - c[0], p[1] - c[1]))));
+
+/* ---------------- 场地 / 道路 / 护坡（DLSS、DLSS-斜坡） ----------------
+ * 解析约定见文件头 v3 说明。DLSS_TOL_MM = 多段线端点接续判定容差。 */
+const DLSS_TOL_MM = 150;
+const dlssMm = dlssRaw.map((s, i) => ({ id: i + 1, closed: s.closed, pts: s.pts.map(toModelMm) }));
+const nearMm = (p, q, tol) => Math.hypot(p[0] - q[0], p[1] - q[1]) <= tol;
+const ringOf = (pts, tol = 50) => (pts.length > 1 && nearMm(pts[0], pts[pts.length - 1], tol) ? pts.slice(0, -1) : pts);
+function pointInRing(p, ring) {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const a = ring[i], b = ring[j];
+    if (((a[1] > p[1]) !== (b[1] > p[1])) && (p[0] < (b[0] - a[0]) * (p[1] - a[1]) / (b[1] - a[1]) + a[0])) inside = !inside;
+  }
+  return inside;
+}
+const ringAreaM2 = ring => Math.abs(polylineArea(ring)) / 1e6;
+const distToSegMm = (p, a, b) => {
+  const dx = b[0] - a[0], dy = b[1] - a[1];
+  let t = ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / (dx * dx + dy * dy);
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(p[0] - (a[0] + t * dx), p[1] - (a[1] + t * dy));
+};
+const distToRingMm = (p, ring) => Math.min(...ring.map((a, i) => distToSegMm(p, a, ring[(i + 1) % ring.length])));
+function segHits(a, b, c, d) {   // 严格相交（端点接触不算）
+  const d1x = b[0] - a[0], d1y = b[1] - a[1], d2x = d[0] - c[0], d2y = d[1] - c[1];
+  const den = d1x * d2y - d1y * d2x;
+  if (Math.abs(den) < 1e-9) return false;
+  const t = ((c[0] - a[0]) * d2y - (c[1] - a[1]) * d2x) / den;
+  const u = ((c[0] - a[0]) * d1y - (c[1] - a[1]) * d1x) / den;
+  return t > 1e-9 && t < 1 - 1e-9 && u > 1e-9 && u < 1 - 1e-9;
+}
+function selfHits(ring) {
+  let n = 0;
+  for (let i = 0; i < ring.length; i++) for (let j = i + 2; j < ring.length; j++) {
+    if (i === 0 && j === ring.length - 1) continue;
+    if (segHits(ring[i], ring[(i + 1) % ring.length], ring[j], ring[(j + 1) % ring.length])) n++;
+  }
+  return n;
+}
+
+let SITE = null, ROADS = null;
+const SLOPES = [];
+if (!dlssMm.length) {
+  console.warn('警告: DLSS 图层没有多段线，场地/道路跳过');
+} else {
+  const bldC = bldMm.reduce((a, p) => [a[0] + p[0] / bldMm.length, a[1] + p[1] / bldMm.length], [0, 0]);
+  const wraps = dlssMm.filter(s => pointInRing(bldC, ringOf(s.pts)));
+  if (wraps.length !== 1) throw new Error('DLSS 中「闭合后含建筑中心」的折线应有且只有 1 条，实得 ' + wraps.length + ' 条');
+  const wrap = wraps[0];
+  const siteRing = ringOf(wrap.pts);
+  const missCorner = bldMm.filter(p => !pointInRing(p, siteRing)).length;
+  if (missCorner) console.warn('警告: 建筑外墙轮廓线有 ' + missCorner + ' 个角点落在场地轮廓之外');
+  const pool = dlssMm.filter(s => s.id !== wrap.id);
+  const used = new Set(), order = [];
+  let cur = siteRing[0];
+  for (;;) {
+    const hit = pool.find(s => !used.has(s.id) && (nearMm(cur, s.pts[0], DLSS_TOL_MM) || nearMm(cur, s.pts[s.pts.length - 1], DLSS_TOL_MM)));
+    if (!hit) break;
+    used.add(hit.id);
+    const seq = nearMm(cur, hit.pts[0], DLSS_TOL_MM) ? hit.pts : hit.pts.slice().reverse();
+    order.push({ id: hit.id, seq });
+    cur = seq[seq.length - 1];
+  }
+  const left = pool.filter(s => !used.has(s.id));
+  if (left.length) console.warn('警告: 有 ' + left.length + ' 条 DLSS 折线未串进道路通路（id ' + left.map(s => s.id).join(',') + '），已忽略');
+  const outer = [siteRing[0]];
+  for (const step of order) outer.push(...step.seq.slice(1));
+  let nearest = 0, bestD = Infinity;
+  siteRing.forEach((p, i) => {
+    const d = Math.hypot(p[0] - outer[outer.length - 1][0], p[1] - outer[outer.length - 1][1]);
+    if (d < bestD) { bestD = d; nearest = i; }
+  });
+  if (bestD > DLSS_TOL_MM) console.warn('警告: 道路通路末端离场地环最近顶点 ' + round(bestD, 1) + ' mm（> ' + DLSS_TOL_MM + ' mm），请检查图纸');
+  for (let k = nearest; k > 0; k--) outer.push(siteRing[k]);
+  const outerArea = ringAreaM2(outer), siteArea = ringAreaM2(siteRing);
+  const hits = selfHits(outer);
+  if (hits) console.warn('警告: 场地+道路整环自交 ' + hits + ' 处，请检查图纸');
+  const closureMm = round(Math.hypot(siteRing[0][0] - siteRing[siteRing.length - 1][0], siteRing[0][1] - siteRing[siteRing.length - 1][1]), 1);
+  SITE = {
+    layer: 'DLSS',
+    sourcePolylineId: wrap.id,
+    vertexCount: siteRing.length,
+    areaM2: round(siteArea, 1),
+    closureMm,
+    closureNote: wrap.closed ? '原多段线已勾闭合标志'
+      : '原多段线未勾闭合标志：首尾点分别在场地东南角路口两侧，闭合段长 ' + closureMm + ' mm = 场地与道路区的共边（路口封口线）',
+    outlineSiteM: siteRing.map(p => r3(toSiteM(p))),
+    outlineModelMm: siteRing.map(r1),
+  };
+  ROADS = {
+    layer: 'DLSS',
+    memberIds: order.map(s => s.id),
+    vertexCount: outer.length,
+    outerAreaM2: round(outerArea, 1),
+    areaM2: round(outerArea - siteArea, 1),
+    selfIntersections: hits,
+    note: '整环 = 场地 + 道路（' + round(outerArea, 1) + ' m²），其中场地轮廓（' + round(siteArea, 1) + ' m²）范围内顶面取室外地坪、'
+      + '其余（' + round(outerArea - siteArea, 1) + ' m²）顶面跟随地形；查看器只出一块实体、不再按这个分界拆材质岛，'
+      + 'areaM2 仅作参考（含进场混凝土路、现状道路及其西南延伸段）。'
+      + '整环由 DLSS 的 ' + dlssMm.length + ' 条多段线按端点（容差 ' + DLSS_TOL_MM + ' mm）串成，自交 ' + hits + ' 处。',
+    outlineSiteM: outer.map(p => r3(toSiteM(p))),
+    outlineModelMm: outer.map(r1),
+  };
+}
+for (let i = 0; i < slopeRaw.length; i++) {
+  const ring = ringOf(slopeRaw[i].pts.map(toModelMm), 50);
+  const topA = ring[ring.length - 1], topB = ring[0];
+  let topEdgeToSiteMm = null;
+  if (SITE) {
+    const sr = SITE.outlineModelMm;
+    topEdgeToSiteMm = round(Math.min(distToRingMm(topA, sr), distToRingMm(topB, sr)), 1);
+    if (topEdgeToSiteMm > 800) console.warn('警告: DLSS-斜坡 #' + (i + 1) + ' 坡顶线端点离场地轮廓 ' + topEdgeToSiteMm + ' mm，请检查图纸');
+  }
+  SLOPES.push({
+    layer: 'DLSS-斜坡',
+    id: i + 1,
+    vertexCount: ring.length,
+    areaM2: round(ringAreaM2(ring), 1),
+    topEdgeToSiteOutlineMm: topEdgeToSiteMm,
+    topEdgeNote: '护坡环首尾点重合（闭合）；首尾连线 = 坡顶线，落在场地西边界上，生成时取场地标高；其余为坡底外边界，贴地形/河床面',
+    outlineSiteM: ring.map(p => r3(toSiteM(p))),
+    outlineModelMm: ring.map(r1),
+  });
+}
 
 /* ---------------- 模型基准（与当前白模 JSON 的一致性核对） ---------------- */
 const modelRef = { wallsOuterMm: null, axisGridMm: null, axisOriginMm: null, elevationsMm: null };
@@ -214,8 +346,7 @@ const envBoxRef = (() => {
 const ENVIRONMENT_PARAMS = {
   marginMm: ENV_MARGIN_MM,
   gridMm: 1500,
-  platformOffsetMm: 5000,
-  platformSinkMm: 300,
+  platformSinkMm: 500,
   idwPower: 2,
   idwK: 12,
   despikeMm: 600,
@@ -238,7 +369,8 @@ const ENVIRONMENT_PARAMS = {
   terrainBoxModelMm: envBoxRef,
   note: '地形范围 = 模型墙体 AABB 每侧外扩 marginMm；水面 = 河床 + waterDepthMm（可改）；'
     + 'slopeTarget 1:5 取自建筑 JSON 的 IntakePoolChannelSlopeParameters(1000/5000)，slopeMax 1:1 为硬上限；'
-    + 'platformSinkMm 使平台面正好等于散水底面（L.grade − 300）；'
+    + '平台（场平）范围 = 本文件的 site 轮廓（DLSS 场地）内部逐点判断，建筑外墙 AABB 挖空；'
+    + 'platformSinkMm 使平台面正好等于 DLSS 面底面（L.grade − 500 = js/siteworks.js 的 roadThkMm 500），DLSS 面落在平台上、护坡从平台边缘斜向河床；'
     + 'bedMinDepthMm 是「河床面」的深度分界（槽内低于插值地面超过该值才算河床）；'
     + 'bedUnderMm 再要求整格低于当地水位该值，把网格量化的材质边界藏到水面之下（否则岸上会出现阶梯色块）；'
     + 'corridorSampleMm 同时是水面条带的纵向细分步长（岸线贴合网格交点）。'
@@ -246,10 +378,41 @@ const ENVIRONMENT_PARAMS = {
     + 'terrainBoxModelMm 按当前内嵌模型的墙体 AABB 推得，仅供参考。',
 };
 
+/* ---------------- 场地/道路/护坡生成参数（js/siteworks.js 读取）
+ * 默认值与 white-model-viewer/js/siteworks.js 的 DEFAULT_PARAMS 一致。 */
+const SITEWORKS_PARAMS = {
+  siteThkMm: 500,       // 护坡无地形数据时的兜底标高参考
+  roadThkMm: 500,       // DLSS 面（场地 + 道路）的厚度
+  slopeThkMm: 500,
+  roadLiftMm: 50,
+  roadBlendMm: 5000,
+  groundClearMm: 50,
+  triMaxMm: 2000,
+  triMaxRounds: 7,
+  wallInsetMm: 50,
+
+  note: '场地与道路是同一条 CAD 线上相接的两片范围（实测场地 88.7 m 边界全部贴在 DLSS 整环上），'
+    + '所以只出一块 DLSS 面、只做一趟三角化（材质 = 道路）；场地轮廓仅参与高程规则与「建筑范围」判据，不出实体 —— '
+    + '早先按平面位置拆成「场地」「道路」两个材质岛、各建一块实体时，交界处有两片位置重合的立侧面、'
+    + '逐像素抢深度，人视图里闪成一条棋盘格斜纹带；改成同一块面按三角形重心分岛后，分界在场地轮廓上留下锯齿状明暗斜带，'
+    + '故 2026-09-25 按用户要求删掉场地实体。'
+    + '场地轮廓范围内的顶面 = 室外地坪 L.grade（平的，实测 0 mm 偏差），'
+    + '建筑外墙 AABB 处挖空（挖空 = 建筑占位，不挖场地轮廓）；'
+    + '场地轮廓外顶面跟随地形，roadLiftMm 抬离自然地面避免与地形共面闪烁，'
+    + '离场地轮廓 roadBlendMm 内渐变为与场地齐平（边界上正好取到室外地坪，无台阶）；'
+    + '底面 = 顶面 − roadThkMm（只有一块板，只能有一个厚度；'
+    + 'siteThkMm 只作为护坡无地形数据时的兜底标高参考）。'
+    + '护坡 = DLSS-斜坡 环，坡顶线取场地标高、坡底外边界贴地形/河床面，'
+    + '底面 = min(顶面 − slopeThkMm, 地形 − groundClearMm) 保证始终压在地形之下。'
+    + 'triMaxMm / triMaxRounds 控制三角网最大边长与细分轮数（长边中点细分，公共边不裂）。'
+    + 'wallInsetMm = 挖空（建筑外墙 AABB）向内收 —— 只挖建筑这一处，不挖场地轮廓。'
+    + '这些键都能直接在本字段里改（改完重跑工具即可）。',
+};
+
 /* ---------------- 组装输出 ---------------- */
 const out = {
   name: '菖蒲垇项目 总平面图 → 建筑白模 对位与环境数据',
-  version: 2,
+  version: 3,
   source: {
     dxf: '../Flie/输入文件/菖蒲垇项目/总平面图.dxf',
     bytes: statSync(dxfPath).size,
@@ -329,6 +492,10 @@ const out = {
     })),
   },
   environment: ENVIRONMENT_PARAMS,
+  siteWorks: SITEWORKS_PARAMS,
+  site: SITE,
+  roads: ROADS,
+  slopes: SLOPES,
   context: {
     scarps: dmtz.map(s => ({ layer: s.layer, outlineSiteM: s.pts.map(r3), outlineModelMm: s.pts.map(p => r1(toModelMm(p))) })),
     pipes: pipes.map(s => ({ layer: s.layer, outlineSiteM: s.pts.map(r3), outlineModelMm: s.pts.map(p => r1(toModelMm(p))) })),
@@ -375,9 +542,28 @@ const mergedBankSegs = sxssChains.filter(c => c.members.length > 1).map(c => c.m
 console.log('河道岸线: ' + sxssChains.length + ' 条（' + (mergedBankSegs.length ? '其中 ' + mergedBankSegs.length + ' 条由多段拼接: ' + mergedBankSegs.join('/') + ' 段' : '无多段拼接') + '）  陡坎: ' + dmtz.length + ' 段  注记: ' + texts.length + ' 条');
 console.log('主河槽: 岸线 id ' + out.riverChannel.mainChannel.bankIds.join(' + ') + '（' + out.riverChannel.name.trim() + '）');
 console.log('环境参数: 外扩 ' + ENVIRONMENT_PARAMS.marginMm + ' mm · 网格 ' + ENVIRONMENT_PARAMS.gridMm + ' mm · 水深 '
-  + ENVIRONMENT_PARAMS.waterDepthMm + ' mm · 平台面 = 室外地坪 − ' + ENVIRONMENT_PARAMS.platformSinkMm + ' mm · 河床材质分界 '
+  + ENVIRONMENT_PARAMS.waterDepthMm + ' mm · 平台面 = 室外地坪 − ' + ENVIRONMENT_PARAMS.platformSinkMm + ' mm（范围 = 场地轮廓内部）· 河床材质分界 '
   + ENVIRONMENT_PARAMS.bedMinDepthMm + '/' + ENVIRONMENT_PARAMS.bedUnderMm + ' mm');
 console.log('地形参考范围: X ' + envBoxRef.x0 + '..' + envBoxRef.x1 + '  Y ' + envBoxRef.y0 + '..' + envBoxRef.y1 + ' mm');
+if (SITE) {
+  console.log('场地(DLSS 含建筑那圈): ' + SITE.vertexCount + ' 顶点  ' + f(SITE.areaM2, 1) + ' m²  闭合段 ' + f(SITE.closureMm, 1) + ' mm'
+    + (SITE.closureMm > 1 ? '（未勾闭合标志，路口封口线）' : ''));
+} else {
+  console.log('场地: DLSS 图层未解析出（跳过）');
+}
+if (ROADS) {
+  console.log('道路(整环 − 场地): ' + ROADS.memberIds.length + ' 段拼接  ' + f(ROADS.areaM2, 1) + ' m²'
+    + '（整环 ' + f(ROADS.outerAreaM2, 1) + ' m²）  自交 ' + ROADS.selfIntersections + ' 处');
+} else {
+  console.log('道路: DLSS 图层未解析出（跳过）');
+}
+for (const s of SLOPES) {
+  console.log('护坡 #' + s.id + '(DLSS-斜坡): ' + s.vertexCount + ' 顶点  ' + f(s.areaM2, 1) + ' m²  坡顶线离场地轮廓 '
+    + (s.topEdgeToSiteOutlineMm === null ? 'n/a' : f(s.topEdgeToSiteOutlineMm, 1) + ' mm'));
+}
+console.log('道路/护坡参数: 厚度 ' + SITEWORKS_PARAMS.siteThkMm + '/' + SITEWORKS_PARAMS.roadThkMm + '/' + SITEWORKS_PARAMS.slopeThkMm
+  + ' mm · 道路抬离地形 ' + SITEWORKS_PARAMS.roadLiftMm + ' mm · 道路与场地过渡 ' + SITEWORKS_PARAMS.roadBlendMm + ' mm · 三角网最大边长 ' + SITEWORKS_PARAMS.triMaxMm + ' mm'
+  + ' · DLSS 整环只出一块实体（场地轮廓仅参与高程规则）');
 console.log(inlineNote);
 if (modelRef.wallsOuterMm) {
   console.log('模型墙体 AABB: ' + modelRef.wallsOuterMm.x1 + ' × ' + modelRef.wallsOuterMm.y1 + ' mm  → 长边差 ' + consistency.deltaLengthMm

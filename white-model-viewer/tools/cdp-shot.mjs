@@ -3,6 +3,7 @@
  * 用法2（批量）: node tools/cdp-shot.mjs <url> <输出目录> [等待秒数] [--views=v1,v2|all] [--channels=color,depth,normal]
  *   批量模式循环 视角 × 通道，输出 <视角>-<通道>.png 与 manifest.json（含相机参数，便于跨版本比对）。
  *   批量模式依赖页面暴露的 window.WMShot 接口；不要与 ?static=1 同用（static 模式渲染 8 帧后停帧）。
+ *   --pre="<表达式>" / --eval="<表达式>"：截图前 / 截图后在页面里求值并打印（如 --eval="WMShot.siteCheck()"）。
  * 依赖: 本机安装的 Chrome / Edge；Node 22+（使用内置 WebSocket）。
  */
 import { spawn } from 'node:child_process';
@@ -27,7 +28,7 @@ if (!url || !outPath) {
   process.exit(1);
 }
 const waitMs = (waitSec ? parseFloat(waitSec) : 8) * 1000;
-const batch = flags.length > 0 || !/\.png$/i.test(outPath);
+const batch = flagVal('views') !== null || flagVal('channels') !== null || !/\.png$/i.test(outPath);
 const profile = mkdtempSync(join(tmpdir(), 'cdp-shot-'));
 
 const candidates = [
@@ -127,6 +128,27 @@ try {
     return r && r.result ? r.result.value : undefined;
   }
 
+  async function waitBuilt() {
+    for (let i = 0; i < 40; i++) {
+      if (await evalBool('!!(window.WMShot && window.WMShot.built && window.WMShot.built())')) return true;
+      await sleep(500);
+    }
+    return false;
+  }
+
+  async function runExpr(expr, label) {
+    const r = await send('Runtime.evaluate', { expression: String(expr), returnByValue: true, awaitPromise: true });
+    console.log(label + ':', JSON.stringify(r.result ? r.result.value : r, null, 2));
+  }
+
+  /* --pre：截图/批量前求值（例如先 WMShot.cam(...) 摆机位） */
+  const preExpr = flagVal('pre');
+  if (preExpr) {
+    await waitBuilt();
+    await runExpr(preExpr, 'pre 结果');
+    await sleep(600);
+  }
+
   async function runBatch() {
     for (let i = 0; i < 40; i++) {
       if (await evalBool('!!(window.WMShot && window.WMShot.built && window.WMShot.built())')) break;
@@ -178,6 +200,13 @@ try {
     const out = resolve(outPath);
     writeFileSync(out, Buffer.from(shot.data, 'base64'));
     console.log('截图已保存:', out);
+  }
+
+  /* --eval="<表达式>"：在页面里跑一段 JS 并打印返回值（自检用，如 WMShot.siteCheck()） */
+  const evalExpr = flagVal('eval');
+  if (evalExpr) {
+    await waitBuilt();
+    await runExpr(evalExpr, 'eval 结果');
   }
   ws.close();
 } catch (e) {

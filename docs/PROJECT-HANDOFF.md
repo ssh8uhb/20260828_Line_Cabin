@@ -1,6 +1,6 @@
 # 项目交接说明 — 线条小屋 / 建筑白模（20260828_Line_Cabin）
 
-> 交接版本：v0.3.0（tag v0.3.0；v0.3.0 之后的**周边环境渲染**尚未提交，见 §2 与 §7）　最后更新：2026-09-24
+> 交接版本：v0.4.0（tag `v0.4.0`，见 §2 与 §9）　最后更新：2026-09-25
 > 面向对象：接手的 AI Agent（Codex / Cursor 等）与项目负责人。
 > 仓库工作约定见根目录 AGENTS.md；下一步任务见 docs/ROADMAP.md；数据映射见 docs/DATA-MODEL.md。
 
@@ -21,7 +21,7 @@ Blender 或其他建模软件**。
 第 1 段的前提是：JSON 由设计插件导出，字段有明确的业务含义（可解释、合理），只是缺少文档说明。
 因此遇到不确定字段时，**优先去问用户或对照 Flie/输入文件/PlanFundingDrawing_JSON说明.md，不要凭字段名猜**。
 
-## 2. 当前实现（v0.3.0）
+## 2. 当前实现（v0.4.0）
 
 主交付物是 white-model-viewer/，一个不依赖任何构建工具、可双击打开的单页应用。
 
@@ -29,23 +29,25 @@ Blender 或其他建模软件**。
 | --- | --- | --- |
 | JSON 解析与坐标对齐 | js/white-model.js 的 parseDrawing() | 遍历 ViewFrames，按轴线 1 ∩ A 把三个图框对齐到同一坐标系，重复图元去重 |
 | 标高体系 | buildLevels() | 由 PlanElevationAnnotationObject 的 Kind 索引生成层高表，Z=0 = 水泵间地面 |
-| 参数化建模 | buildModel() | 墙体（含门窗洞口拆板）、楼板、结构柱、屋面、楼梯/钢梯/爬梯、基础/集水坑/坡道、散水、房间标注 |
+| 参数化建模 | buildModel() | 墙体（含门窗洞口拆板）、楼板、结构柱、屋面、楼梯/钢梯/爬梯、基础/集水坑/坡道、房间标注 |
 | 素模 + 线稿双通道 | buildEdgeLines() / setLinesVisible() | 对实体按 30° 二面角阈值提取黑色棱边；覆盖 walls/slabs/columns/roof/canopies/stairs/extra/families 八个分组（新增实体分组时需同步该名单）；默认隐藏，可切换 |
 | 视角预设（12 个） | applyView() | iso-ne/nw/se/sw 鸟瞰、elev-s/n/w/e 立面、persp-1/2 人视（地坪 + 1700 视高，裁掉地坪以下构件）、env-iso/env-river 周边鸟瞰/河道视角（需载入周边环境）；由建筑包围盒自动推算，适配任意 JSON |
 | 场景面板 | renderScenePanel() / applyScene() | 左侧面板「场景（视角镜头）」：10 个固定场景（4 正立面 + 4 角部鸟瞰 + 周边鸟瞰/河道视角，后者未载入环境时置灰）+ 自定义镜头（存相机位置/目标点/裁剪状态）；按 `DrawingName` 分别写入 localStorage（键 `wm.scenes.v1:<DrawingName>`），不可用时退化为会话内存 |
 | 出图通道 | setChannel() / depthMaterial() | color 素模 / depth 线性深度（近白远黑，自定义 ShaderMaterial）/ normal 视空间法线（MeshNormalMaterial）；同一相机逐像素对齐，辅助通道自动隐藏线稿与标注（env 视角下深度跨度取「建筑 ∪ 地形盒」并集） |
-| 批量出图接口 | window.WMShot + tools/cdp-shot.mjs | 页面暴露 built/views/view/cam/channel/info/scenes/saveScene/applyScene/familyCheck/env/loadEnv/clearEnv/envCheck；脚本批量模式循环 视角 × 通道 截图并写 manifest.json（相机参数） |
+| 批量出图接口 | window.WMShot + tools/cdp-shot.mjs | 页面暴露 built/views/view/cam/channel/info/scenes/saveScene/applyScene/familyCheck/env/loadEnv/clearEnv/envCheck/site/loadSite/clearSite/siteCheck；脚本批量模式循环 视角 × 通道 截图并写 manifest.json（相机参数） |
 | 门窗参数化族 | js/families.js | 6 个通用族，按 Kind 与宽度自动匹配，按洞口尺寸缩放、按墙向/法线定向；族内几何统一用洞口局部坐标 u/v/n（正 n 指向室内），`WMShot.familyCheck()` 逐块校核「构件不许凸出墙面」（样例基线 78 块 / 0 越界） |
 | 挑檐截面放样 | js/eaves.js + tools/dxf-profile.mjs | 截面沿屋面外轮廓矩形放样，角部按偏移处理；DXF 截面提取工具已就绪 |
 | 地形导入 | js/terrain.js | OBJ 三角网 + 双控制点相似变换（平移/旋转/等比缩放）+ 高程换算（未接线） |
-| 场地环境数据（总平面图对位） | tools/dxf-site-context.mjs → data/site-context.json（v2） | 由 `总平面图.dxf` 解析出模型↔总平面图对位变换（平移+旋转 3.2962°+×1000）、578 个高程点、进水池、麻桑河岸线、陡坎与注记，全部换算为模型 mm 坐标；生成时同步 index.html 内嵌副本（见 docs/DATA-MODEL.md 第 12 节） |
-| 周边环境渲染（地形/河床/水面） | js/environment.js + white-model.js 的 buildEnv() | 用高程点插值生成地形面（去刺/平滑/坡度约束）、按槽内点插值出河床面、河床 + 水深生成水面；外墙 AABB 每侧外扩 60 m、平台面 = `L.grade − 300`、建筑范围挖空、地块四周 3 m 裙边；面板「载入周边环境（默认数据）」或 `?env=1` 载入，`WMShot.envCheck()` 出验收指标（见 docs/DATA-MODEL.md 第 13 节） |
-| 出图模式 | applyUrlParams() + STATIC | ?static=1 渲染数帧后停住；?env=1 载入周边环境（用内嵌副本，离线可用）；?lines=1 带线稿；?annot=0 去标注；?view= 视角预设；?channel= 出图通道；?bg=RRGGBB 设背景 |
-| 离线可用 | index.html 内嵌 #sampleData / #eavesProfileData / #siteContextData | 双击 file:// 打开即可看到示例白模；周边环境数据也是内嵌副本，`?env=1` 离线可用 |
+| 场地环境数据（总平面图对位） | tools/dxf-site-context.mjs → data/site-context.json（v3） | 由 `总平面图.dxf` 解析出模型↔总平面图对位变换（平移+旋转 3.2962°+×1000）、578 个高程点、进水池、麻桑河岸线、陡坎与注记，以及场地轮廓（DLSS 里含建筑的那一圈）/ 道路（DLSS 整环）/ 护坡（DLSS-斜坡）折线，全部换算为模型 mm 坐标；生成时同步 index.html 内嵌副本（见 docs/DATA-MODEL.md 第 12 节） |
+| 周边环境渲染（地形/河床/水面） | js/environment.js + white-model.js 的 buildEnv() | 用高程点插值生成地形面（去刺/平滑/坡度约束）、按槽内点插值出河床面、河床 + 水深生成水面；外墙 AABB 每侧外扩 60 m、平台面 = `L.grade − 500`、建筑范围挖空、地块四周 3 m 裙边；面板「载入周边环境（默认数据）」或 `?env=1` 载入，`WMShot.envCheck()` 出验收指标（见 docs/DATA-MODEL.md 第 13 节） |
+| 道路 / 护坡 | js/siteworks.js + white-model.js 的 buildSite() | DLSS 整环只出一块实体：顶面在场地轮廓（`site` 多边形）内严格齐平室外地坪、轮廓外跟随地形（5 m 过渡带内平滑回室外地坪、整体抬离自然地面 50 mm）；护坡 = `DLSS-斜坡` 环（场地标高斜到河床）。**早先按三角形重心把 DLSS 面分成「场地」「道路」两个材质岛、各建一块实体，交界处两片重合立侧面会闪棋盘格斜纹带（2026-09-24 修复）；分岛后场地边界上又出现锯齿状明暗斜带，2026-09-25 按用户要求删除场地实体**；厚度统一 500 mm，面板 road/slope 两个开关，`WMShot.siteCheck()` 出验收指标（见 docs/DATA-MODEL.md 第 14 节） |
+| 出图模式 | applyUrlParams() + STATIC | ?static=1 渲染数帧后停住；?env=1 载入周边环境（地形/河床/水面/道路/护坡，用内嵌副本，离线可用）；?lines=1 带线稿；?annot=0 去标注；?view= 视角预设；?channel= 出图通道；?bg=RRGGBB 设背景 |
+| 离线可用 | index.html 内嵌 #sampleData / #eavesProfileData / #siteContextData | 双击 file:// 打开即可看到示例白模；周边环境与场地数据也是内嵌副本，`?env=1` 离线可用 |
 
-占位数据说明：门窗族是通用占位几何、挑檐是 500×150 平板占位截面、地面是平台环 + 自然地形（周边环境，
+占位数据说明：门窗族是通用占位几何、挑檐是 500×150 平板占位截面、地形是周边环境（高程点插值生成，
 未接入三角网 OBJ）。管线已打通，等用户提供素材后替换即可，见 docs/ROADMAP.md。
-场地环境（河道 / 地形 / 水面）已接入渲染（ROADMAP 1.4 完成大半），余下进水池池体、陡坎与管道。
+场地环境（河道 / 地形 / 水面 / 道路 / 护坡）已接入渲染（ROADMAP 1.4 完成大半），余下进水池池体、陡坎与管道。
+原「地面 / 散水」回字形实体已按用户要求删除（与外圈 DLSS 面重叠、混淆）。
 
 ## 3. 架构与数据流
 
@@ -58,15 +60,16 @@ Blender 或其他建模软件**。
       → buildModel(json, extras)
           → parseDrawing(json)   // 图元 → 中间数据结构 data（见 docs/DATA-MODEL.md）
           → buildLevels(data)    // 标高体系 L
-          → 各构件建模，写入 9 个分组: walls/slabs/columns/roof/stairs/extra/ground/families/annot
+          → 各构件建模，写入 9 个分组: walls/slabs/columns/roof/canopies/stairs/extra/families/annot
           → buildEdgeLines()     // 线稿叠加通道（默认隐藏）
       → applyUrlParams(): 应用 ?env=1 / ?lines=1 / ?annot=0 / ?view= / ?channel= / ?bg=RRGGBB
       → buildEnv(sc): 周边环境（WMEnv.build → 地形/河床/水面/环境线 4 个分组），模型重建后自动重载
+      → buildSite(sc): 道路/护坡（WMSite.build → road/slope 2 个分组），?env=1 时与 buildEnv 一起执行
   → 用户可拖入其它 JSON 文件重新构建
 ```
 
 渲染：Three.js r128（lib/three.min.js）+ OrbitControls，无 UI 框架，无模块打包，全部挂在 window 上的
-命名空间里（window.WMFamilies / window.WMEaves / window.WMTerrain / window.WMEnv）。
+命名空间里（window.WMFamilies / window.WMEaves / window.WMTerrain / window.WMEnv / window.WMSite）。
 
 ## 4. 运行与出图
 
@@ -83,7 +86,7 @@ node white-model-viewer/tools/cdp-shot.mjs "http://localhost:8123/white-model-vi
 # 批量出图：12 视角 × 3 通道（color/depth/normal），输出 PNG + manifest.json
 node white-model-viewer/tools/cdp-shot.mjs "http://localhost:8123/white-model-viewer/?annot=0" outdir --views=all --channels=color,depth,normal
 
-# 带周边环境（地形/河床/水面）的单视角截图与批量出图
+# 带周边环境（地形/河床/水面 + 道路/护坡）的单视角截图与批量出图
 node white-model-viewer/tools/cdp-shot.mjs "file:///D:/Work/Project/20260828_Line_Cabin/white-model-viewer/index.html?env=1&annot=0" "$env:TEMP/wm-env.png" 8
 node white-model-viewer/tools/cdp-shot.mjs "file:///D:/Work/Project/20260828_Line_Cabin/white-model-viewer/index.html?env=1&annot=0" "$env:TEMP/wm-env-batch" --views=all --channels=color,depth,normal
 ```
@@ -139,6 +142,10 @@ Lineart/Canny 条件时，清晰的棱边线能显著提高“几何不走形”
   （图纸文字：引水渠道、C20 素混凝土护坡 / 护底、1:2.0 与 1:5.0 边坡）。
 - **高程点**：图层 `GCD` 的块 `gc200` 共 578 个，`height` 属性 = 高程值（163.05 – 175.47 m）。
 - **其它**：`DMTZ` 陡坎 3 条（在建筑与进水池之间南北向穿过）、出水主管管道线 1 条、控制点 2 个、注记 40 条。
+- **场地 / 道路**（图层 `DLSS`）：整环多段线 85 顶点 1317.0 m²，其中含建筑的那一圈（8 顶点 495.9 m²，
+  生成器记为 `site`）是**场地轮廓**——只作顶面高程分界与「建筑范围」判据，不再单独出实体；其余部分为**道路**
+  （6 段端点拼接、自交 0）；场地 8 条边（88.7 m）全部贴在整环折线上（0 – 1.5 mm）。
+- **护坡**（图层 `DLSS-斜坡`）：开口折线 9 顶点（首尾连线 = 坡顶线，与场地轮廓距离 0.0 mm），187.8 m²。
 - **与当前模型不一致（重要）**：总平面图的建筑外墙轮廓比当前内嵌 JSON 的墙体 AABB（7200 × 15100）
   长边多 **2802.6 mm**，进水池北边缘超出当前模型北端 **1749.4 mm**。两者的取水构筑物位置也不同
   （旧 JSON 取水构筑物在 X −14100…−7613，新图进水池在 X −12801…−10001）。
@@ -159,7 +166,10 @@ Lineart/Canny 条件时，清晰的棱边线能显著提高“几何不走形”
 | 挑檐放样路径 | 屋面外轮廓矩形（RoofPolylineObject Kind=0），截面自外墙面向外放样 | white-model.js 屋面段 + js/eaves.js | 挑檐形状 |
 | 门窗族几何 | 6 个通用族（框 70 / 门扇厚 45 / 玻璃厚 8） | js/families.js | 门窗细节 |
 | 地形范围 | 建筑外墙 AABB 每侧外扩 60 m（127 × 135 m） | `environment.marginMm` | 周边环境覆盖范围 |
-| 场地平台标高 | 平台面 = `L.grade − 300`（正好是散水底面）；建筑外墙范围内挖空不出面 | `environment.platformSinkMm` | 建筑与地形衔接 |
+| 场地平台标高 | 平台面 = `L.grade − 500`（正好是 DLSS 面底面），范围 = 场地轮廓（DLSS）内部；建筑外墙范围内挖空不出面 | `environment.platformSinkMm` | 建筑与地形衔接 |
+| 场地 / 道路厚度 | 500 mm（DLSS 面只出一块实体，只能有一个厚度）；顶面在场地轮廓内 = 室外地坪（平）；轮廓外跟随地形、抬离自然地面 50 mm、5 m 过渡带回室外地坪 | `siteWorks.roadThkMm / roadLiftMm / roadBlendMm` | 道路形态 |
+| 护坡厚度 | 500 mm（无地形数据时坡底取 `L.grade − siteThkMm`；顶面离地时自动加厚不悬空） | `siteWorks.slopeThkMm / siteThkMm / groundClearMm` | 护坡形态 |
+| 场地轮廓不出实体 | 场地轮廓只用于顶面高程分界与「建筑范围」判据（`siteCheck().flatDevMm` 校验齐平），DLSS 面整环一块实体、材质 `road`；面板只剩 road / slope 两个开关 | `js/siteworks.js` 的 `pointInRing(siteRing, …)` | 建筑周边地面的外观 |
 | 水深 | 水面 = 河床 + **1000 mm**（未按水文资料） | `environment.waterDepthMm` | 河道水位 |
 | 主河槽岸线 | 两条主岸各由 2 段 SXSS 折线端点拼接（容差 0.5 m）；其余 SXSS 折线（渠道/护坡）只画线不做水面 | `riverChannel.mainChannel.bankIds` | 河道范围 |
 | 进水池 | 只画轮廓线，不做池体（足迹基本落在主河槽内） | — | 取水构筑物形态 |
@@ -168,8 +178,10 @@ Lineart/Canny 条件时，清晰的棱边线能显著提高“几何不走形”
 
 - **门窗是占位几何**：只按洞口宽高缩放通用族，没有真实门窗分格、开启扇位置，需要 2D CAD 大样替换。
 - **挑檐是占位截面**：500×150 平板，真实放样截面（DXF）到位后替换。
-- **地面/散水为几何近似**：按建筑外墙 AABB 外偏 5 m 生成 300 mm 厚回字形实体，不使用 ApronObject 轮廓；
-  真实带高程三角网（OBJ）导入管线已就绪，但当前样例未启用。
+- **道路 / 护坡是图纸轮廓、不是几何近似**：直接取总平面图 `DLSS` / `DLSS-斜坡` 图层（多段线已由用户修剪成闭合图形），
+  DLSS 整环只出一块实体（2026-09-24 修掉了「场地」「道路」各建实体时交界处的棋盘格斜纹带；
+  2026-09-25 又按用户要求删掉了分岛后场地边界上的锯齿状明暗斜带，即删除场地实体）。
+  仍依赖两份图纸版本收敛（见下条）。真实带高程三角网（OBJ）导入管线已就绪，但当前样例未启用。
 - **墙体按轴对齐矩形（AABB）处理**：由 Outline 的 min/max 得到矩形，**不支持斜墙/异形墙**；若后续样本出现斜墙，需要改成多边形与定向开洞。
 - **不做布尔运算**：墙体开洞用“沿墙区间 + 高度区间”的参数化拆板实现，避免依赖 CSG 库；
   洞口若跨越多个墙段或与墙端过近，可能出现拆板边界不理想。
@@ -182,8 +194,8 @@ Lineart/Canny 条件时，清晰的棱边线能显著提高“几何不走形”
   **两侧并非同一版设计**；建议按新图重新导出 JSON，`data/site-context.json` 的对位只依赖总平面图，重导出后无需修改。
 - **周边环境是插值地貌，不是实测地形**：地形面由 578 个高程点 IDW 插值 + 去刺/平滑/坡度约束生成
   （1.5 m 网格），河床面由槽内点插值、水面 = 河床 + 水深（默认 1 m）。因此**不能当作土方量或防洪依据**；
-  平台（散水）外缘与总平面图东南侧「地面硬化」高程点存在 0.9 – 1.2 m 台阶，属两份图纸版本差。
-  验收基线与已知问题见 docs/DATA-MODEL.md 第 13 节。
+  平台（场地）外缘与总平面图东南侧「地面硬化」高程点存在 0.9 – 1.2 m 台阶，属两份图纸版本差。
+  验收基线与已知问题见 docs/DATA-MODEL.md 第 13 节；道路 / 护坡见第 14 节。
 
 ## 8. 素材现状与交付规格
 
@@ -205,8 +217,8 @@ Lineart/Canny 条件时，清晰的棱边线能显著提高“几何不走形”
 | v0.1.0 | e6c8857 | 白模查看器首版：JSON → Three.js 参数化白模、离线双击可用、CDP 截图脚本 |
 | — | 6d1b253 | 上传输入文件（JSON / JSON 说明 / DWG / DXF / 解析结果） |
 | v0.2.0 | 5867b3a | 线稿通道、门窗参数化族、挑檐截面放样 + DXF 提取工具、地形导入 |
-| v0.3.0 | e9e43ab…273d642（tag v0.3.0） | 多视角预设（10）+ depth/normal 出图通道 + 批量出图（WMShot / cdp-shot 批量模式）+ 人视地坪裁剪 + ?annot=0 + 场景面板（8 固定场景 + 按图纸持久化的自定义镜头）+ 修复西/北墙窗框横穿墙厚凸出墙面（addPiece 左手基退化 + 双向门内侧把手越界）+ 门窗族几何自检 `WMShot.familyCheck()` |
-| v0.4.0（待提交） | — | 周边环境渲染：`js/environment.js`（高程点插值地形面 + 河床面 + 水面，去刺/平滑/坡度约束/平台挖空）、`?env=1` 与面板「载入周边环境（默认数据）」、env-iso / env-river 两个视角预设（共 12 个）、4 个显示控制复选框、`WMShot.env()/loadEnv()/clearEnv()/envCheck()`、site-context v2（`mainChannel` + `environment` 参数块，生成时同步内嵌副本）、河床/水面材质边界藏到水位之下（`bedUnderMm`，修掉 1.5 m 网格量化的阶梯色块） |
+| v0.3.0 | e9e43ab…273d642（未打 tag） | 多视角预设（10）+ depth/normal 出图通道 + 批量出图（WMShot / cdp-shot 批量模式）+ 人视地坪裁剪 + ?annot=0 + 场景面板（8 固定场景 + 按图纸持久化的自定义镜头）+ 修复西/北墙窗框横穿墙厚凸出墙面（addPiece 左手基退化 + 双向门内侧把手越界）+ 门窗族几何自检 `WMShot.familyCheck()` |
+| v0.4.0 | 2026-09-25（tag `v0.4.0`） | 周边环境渲染：`js/environment.js`（高程点插值地形面 + 河床面 + 水面，去刺/平滑/坡度约束/平台挖空）、`?env=1` 与面板「载入周边环境（默认数据）」、env-iso / env-river 两个视角预设（共 12 个）、4 个显示控制复选框、`WMShot.env()/loadEnv()/clearEnv()/envCheck()`、site-context v2（`mainChannel` + `environment` 参数块，生成时同步内嵌副本）、河床/水面材质边界藏到水位之下（`bedUnderMm`，修掉 1.5 m 网格量化的阶梯色块）；<br>道路 / 护坡：`js/siteworks.js`（总平面图 `DLSS` / `DLSS-斜坡` 图层，整环只出一块实体）、`WMShot.site()/loadSite()/clearSite()/siteCheck()`、site-context v3（`site` / `roads` / `slopes` / `siteWorks`）、删除原「地面 / 散水」实体、**修掉场地与道路各建实体时交界处的棋盘格斜纹带**、**修掉护坡几何从未进场景的 bug**（`buildSlab` 的几何在 `regions[0].geo`，原先误取 `slab.geo` → 恒为 undefined）、**按用户要求删除场地实体**（分岛后场地边界闪锯齿状明暗斜带；DLSS 面改为整环一块实体、材质 `road`，面板只剩 road / slope 两个开关） |
 
 提交信息格式：`<type>: <中文说明>`；里程碑同时打 tag 并推送。
 

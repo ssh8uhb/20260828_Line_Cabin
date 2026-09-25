@@ -13,7 +13,7 @@
 1. **无构建工具**：原生 JS + 本地 three.js r128，没有 npm / webpack / 打包步骤。除非用户明确要求，
    不要引入构建工具或依赖 CDN。
 2. **file:// 必须可用**：white-model-viewer/index.html 双击即可看到白模。示例 JSON、挑檐占位截面、
-   地面样例均以 `<script type="application/json" id="...">` 内嵌在页面中。**新增外部素材时，必须同时在
+   总平面图对位数据（site-context）均以 `<script type="application/json" id="...">` 内嵌在页面中。**新增外部素材时，必须同时在
    页面内嵌一份占位数据**，否则离线打开会失效。
 3. **单位统一 mm**；Z=0 = 水泵间地面（绝对标高 166759）。建筑坐标由三个图框按轴线 1 ∩ A 对齐。
 4. 不提交第三方参考仓库副本（pure-line-room/ 已在 .gitignore 排除），不提交仓库根目录的无关文件。
@@ -29,6 +29,7 @@ white-model-viewer/     主交付物（白模查看器）
   js/families.js        门窗参数化族
   js/eaves.js           挑檐截面沿路径放样
   js/environment.js     周边环境：地形面 / 河床面 / 水面（由高程点插值）
+  js/siteworks.js       道路 / 护坡：总平面图 DLSS、DLSS-斜坡 图层
   js/terrain.js         地形 OBJ 导入 + 双控制点配准（未接线）
   lib/                  three.js r128 + OrbitControls（本地依赖）
   data/                 示例 JSON、挑檐截面、总平面图对位数据（site-context.json）
@@ -44,6 +45,7 @@ docs/                   交接说明、路线图、数据模型、会话纪要
 Set-Location white-model-viewer
 node --check js/white-model.js; node --check js/families.js
 node --check js/eaves.js; node --check js/terrain.js; node --check js/environment.js
+node --check js/siteworks.js
 
 # 2) 渲染截图（需本机有 Chrome/Edge；输出到临时目录，不要提交进仓库）
 node tools/cdp-shot.mjs "file:///D:/Work/Project/20260828_Line_Cabin/white-model-viewer/index.html?static=1&lines=1" "$env:TEMP/wm-check.png" 8
@@ -51,7 +53,7 @@ node tools/cdp-shot.mjs "file:///D:/Work/Project/20260828_Line_Cabin/white-model
 # 3) 批量出图自检（12 视角 × 3 通道，输出目录 + manifest.json，同样不进仓库）
 node tools/cdp-shot.mjs "file:///D:/Work/Project/20260828_Line_Cabin/white-model-viewer/index.html?annot=0" "$env:TEMP/wm-batch" --views=all --channels=color,depth,normal
 
-# 3b) 带周边环境的截图与批量（地形 / 河床 / 水面；?env=1 用内嵌副本，离线可用）
+# 3b) 带周边环境的截图与批量（地形 / 河床 / 水面 / 道路 / 护坡；?env=1 用内嵌副本，离线可用）
 node tools/cdp-shot.mjs "file:///D:/Work/Project/20260828_Line_Cabin/white-model-viewer/index.html?env=1&annot=0" "$env:TEMP/wm-env.png" 8
 node tools/cdp-shot.mjs "file:///D:/Work/Project/20260828_Line_Cabin/white-model-viewer/index.html?env=1&annot=0" "$env:TEMP/wm-env-batch" --views=all --channels=color,depth,normal
 
@@ -68,7 +70,16 @@ python -m http.server 8123 --directory D:/Work/Project/20260828_Line_Cabin
 
 **动了周边环境（js/environment.js）再加一步**：页面 Console 跑 `JSON.stringify(WMShot.envCheck())`，
 要求 `nanCount = 0`、`slopeMax ≤ 1.0`、`spikeMaxMm ≤ 600`、`platform.devMaxMm = 0`、`water.aboveLandCount = 0`
-（v0.4.0 基线：地形 13920 / 河床 1794 / 水面 632 三角，坡度 0.659）。算法与已知问题见 docs/DATA-MODEL.md 第 13 节。
+（v0.4.0 基线：地形 13920 / 河床 1794 / 水面 632 三角，坡度 0.417）。算法与已知问题见 docs/DATA-MODEL.md 第 13 节。
+
+**动了道路 / 护坡（js/siteworks.js）再加一步**：页面 Console 跑 `JSON.stringify(WMShot.siteCheck())`，
+要求 `ok = true`（`issues` 空）、`flatDevMm = 0`（建筑范围内顶面严格齐平室外地坪）、`roadSeamDevMm = 0`、
+`roadGapMaxMm = 0`、`platformGapMm = 0`、`slopeThkMinMm ≥ 499`、`roadRaiseMm` 下限 ≥ −1、
+`roadTopDown` / `slopeTopDown` = 0（v0.4.0 基线：DLSS 面 18760 三角（10152 顶点）、护坡 1352 三角（830 顶点）、
+`roadRaiseMm` [50, 953]、`slopeDropMm` [3879]）。
+⚠ DLSS 面只出一块实体，不要再按 `site` 轮廓拆成两个材质岛——分岛按三角形重心判定，斜穿建筑轮廓的三角带
+会在场地边界上闪出锯齿状明暗斜带（2026-09-25 按用户要求删除场地实体，原因与过程见第 14 节）。
+算法与已知问题见 docs/DATA-MODEL.md 第 14 节。
 
 需要交叉验证图片内容时，用本机识图脚本（用户全局规则要求：禁止回复「无法识别图片」）：
 

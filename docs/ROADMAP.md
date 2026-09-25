@@ -1,6 +1,6 @@
 # 路线图 — 下一步任务
 
-> 更新于 v0.3.0。完成任务后请同步更新本文件状态、white-model-viewer/README.md，必要时更新 docs/DATA-MODEL.md。
+> 更新于 v0.4.0。完成任务后请同步更新本文件状态、white-model-viewer/README.md，必要时更新 docs/DATA-MODEL.md。
 
 ## 0. 优先级总览
 
@@ -9,7 +9,7 @@
 | 1.1 | 挑檐真实截面放样 | 用户：截面 DXF + 对齐说明 | 管线已就绪，等素材 |
 | 1.2 | 门窗族替换为真实大样 | 用户：各类门窗 DXF 大样 | 管线已就绪，等素材 |
 | 1.3 | 真实地形地面 | 用户：三角网 OBJ + 控制点对 | 管线已就绪，等素材 |
-| 1.4 | 建筑周边环境（河道 / 进水池 / 场平） | 无（总平面图已解析） | **地形 / 河床 / 水面已完成（v0.4.0）**，池体与陡坎/管道未建模 |
+| 1.4 | 建筑周边环境（河道 / 进水池 / 场平 / 道路 / 护坡） | 无（总平面图已解析） | **地形 / 河床 / 水面 / 道路 / 护坡已完成（v0.4.0）**，池体与陡坎/管道未建模 |
 | 2.1 | 多视角自动截图导出 | 无 | **已完成（v0.3.0）** |
 | 2.2 | depth / normal 通道导出 | 无 | **已完成（v0.3.0）** |
 | 3.1 | JSON → 白模批量出图（无界面） | 2.1 | 批量框架已就绪，剩任意 JSON 路径加载（?src=）与失败报错 |
@@ -66,21 +66,30 @@
   推荐控制点取轴线 1/A 与 2/D 交点处的地面实际点。
 - **建议改动位置**：js/terrain.js（现在已能解析 OBJ 并做配准，缺少的是真实数据与可选的线框/阴影开关）。
 
-### 1.4 建筑周边环境（河道 / 进水池 / 场平）
+### 1.4 建筑周边环境（河道 / 进水池 / 场平 / 道路 / 护坡）
 
-- **数据来源**：`总平面图.dxf`（WALL_OUT 外墙轮廓线 + 进水池、gc200 高程点、SXSS 河道岸线、DMTZ 陡坎），
-  已由 `tools/dxf-site-context.mjs` 解析并换算到模型坐标系，输出 `data/site-context.json` v2
-  （v2 增加 `mainChannel` 与 `environment` 参数段，并同步 index.html 内嵌副本；见 docs/DATA-MODEL.md 第 12 节）。
+- **数据来源**：`总平面图.dxf`（WALL_OUT 外墙轮廓线 + 进水池、gc200 高程点、SXSS 河道岸线、DMTZ 陡坎、
+  DLSS 道路、DLSS-斜坡 护坡），
+  已由 `tools/dxf-site-context.mjs` 解析并换算到模型坐标系，输出 `data/site-context.json` v3
+  （v2 增加 `mainChannel` 与 `environment` 参数段，v3 增加 `site` / `roads` / `slopes` / `siteWorks`；
+  并同步 index.html 内嵌副本；见 docs/DATA-MODEL.md 第 12 节）。
   一条岸可拆成多段首尾相接的 SXSS 折线，生成器按端点 0.5 m 容差自动拼成整条（`segments` 记段数）。
 - **✅ 已完成（v0.4.0）**：`js/environment.js` 消费该数据，生成**地形面 + 河床面 + 水面**，
   面板「载入周边环境（默认数据）」或 `?env=1` 载入，新增「周边鸟瞰 / 河道视角」两个预设；
   算法、参数、验收基线与已知问题见 docs/DATA-MODEL.md 第 13 节（要点：外墙 AABB 每侧外扩 60 m、
-  1.5 m 网格、平台面 = `L.grade − 300`、水面 = 河床 + 水深 1 m、建筑范围挖空、槽外 30% 为岸坡过渡带）。
+  1.5 m 网格、平台面 = `L.grade − 500`、水面 = 河床 + 水深 1 m、建筑范围挖空、槽外 30% 为岸坡过渡带）。
+- **✅ 已完成（v0.4.0）**：`js/siteworks.js` 用 `DLSS` / `DLSS-斜坡` 生成**道路 + 护坡**（DLSS 整环一块实体，
+  材质 `road`；`site` 轮廓只作顶面高程分界与「建筑范围」判据，不出实体），
+  面板两个开关（road / slope），`WMShot.siteCheck()` 出验收指标，见 docs/DATA-MODEL.md 第 14 节。
+  原「地面 / 散水」回字形实体已按用户要求删除（与外圈 DLSS 面重叠、混淆）。
 - **👉 余下（下一步）**：① 按 `intakePool` 生成池体（现只画轮廓线，足迹落在主河槽内）；
-  ② 陡坎、管道、注记按需加入（现只画线）；③ 场平与散水交界处的缓坡台阶，等两份图纸版本收敛后再处理。
+  ② 陡坎、管道、注记按需加入（现只画线）；③ 场地外缘与总平面图东南侧「地面硬化」高程点的缓坡台阶，
+  等两份图纸版本收敛后再处理。
 - **验收标准**：进水池、河道位置与总平面图一致（对位校验图零偏移）；建筑室外地坪（L.grade）与周边地形自然衔接；
-  depth / normal 通道下环境与建筑同机位对齐。数值基线：`WMShot.envCheck()` 的 `nanCount 0 / slopeMax 0.659 /
-  spikeMaxMm 280 / platform.devMaxMm 0 / water.aboveLandCount 0`。
+  道路/护坡位置与 DLSS / DLSS-斜坡 图层一致；depth / normal 通道下环境与建筑同机位对齐。
+  数值基线：`WMShot.envCheck()` 的 `nanCount 0 / slopeMax 0.417 / spikeMaxMm 280 / platform.devMaxMm 0 /
+  water.aboveLandCount 0`；`WMShot.siteCheck()` 的 `ok true / issues [] / flatDevMm 0 / roadSeamDevMm 0 /
+  roadGapMaxMm 0 / platformGapMm 0 / slopeThkMinMm 500`。
 - **前置提醒**：当前 `总平面图.dxf`（2026-09-24）比页面内嵌 JSON 的建筑长边多 **2802.6 mm**，
   且进水池北边缘超出模型北端 1749.4 mm —— 地形按总平面图生成、建筑按模型生成，
   重新导出 PlanFundingDrawing JSON 后两侧才真正同版（对位数据本身不需要改）。

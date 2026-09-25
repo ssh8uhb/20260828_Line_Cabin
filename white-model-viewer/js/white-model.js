@@ -36,6 +36,9 @@ const state = {
   envBounds: null,     // 周边环境包围盒（视图预设 / 深度区间用）
   envFrame: null,      // 主河槽骨架（env-river 视角用）
   envField: null,      // 环境高程网格（env-river 视角取地面高程用）
+  siteOn: false,       // 道路/护坡是否已生成
+  siteStats: null,     // 道路/护坡统计
+  siteResult: null,    // js/siteworks.js 的完整输出（siteCheck 用）
 };
 
 function log(msg) { state.log.push(msg); }
@@ -121,7 +124,7 @@ const M = {
   slab:    new THREE.MeshStandardMaterial({ color: 0xf3f3f3, roughness: 0.9 }),
   roof:    new THREE.MeshStandardMaterial({ color: 0xeeeeee, roughness: 0.9 }),
   column:  new THREE.MeshStandardMaterial({ color: 0xfafafa, roughness: 0.8 }),
-  ground:  new THREE.MeshStandardMaterial({ color: 0xdedede, roughness: 1 }),
+  ramp:    new THREE.MeshStandardMaterial({ color: 0xdedede, roughness: 1 }),
   annot:   new THREE.LineBasicMaterial({ color: 0x9a9a9a, transparent: true, opacity: 0.8 }),
   glass:   new THREE.MeshStandardMaterial({ color: 0xf2f2f2, roughness: 0.12, metalness: 0.05, transparent: true, opacity: 0.45 }),
   handle:  new THREE.MeshStandardMaterial({ color: 0xd4d4d4, roughness: 0.35, metalness: 0.2 }),
@@ -131,7 +134,27 @@ const M = {
   riverBed: new THREE.MeshStandardMaterial({ color: 0x444444, roughness: 0.95, side: THREE.DoubleSide }),
   water:   new THREE.MeshStandardMaterial({ color: 0x38508c, roughness: 0.15, metalness: 0.0, transparent: true, opacity: 0.8, side: THREE.DoubleSide }),
   envLine: new THREE.LineBasicMaterial({ color: 0x9a9a9a, transparent: true, opacity: 0.9 }),
+  /* 道路/护坡：同为压暗处理，反照率 ≤0.5 便于色通道分色。
+   * polygonOffset 负偏置（朝相机方向压一点深度）：这两个实体与地形到处近共面
+   * （道路顶面就压在自然地面上下几十毫米），不加偏置时远场（≈100 m 处深度分辨率
+   * 60 mm）和贴地的侧立面都会与地形互相闪烁，人视图里表现为一条"梳齿"状的碎带。 */
+  road:    new THREE.MeshStandardMaterial({ color: 0x5a5a5a, roughness: 0.95, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }),
+  slope:   new THREE.MeshStandardMaterial({ color: 0x707070, roughness: 0.95, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }),
 };
+
+/* 人视视角模拟真实照片：裁掉室外地坪以下的基础 / 集水坑等地下构件。
+ * 只挂建筑材质（局部裁剪），不能改成 renderer.clippingPlanes 的全局裁剪：全局会连地形/场地
+ * 一起裁，而自然地面在场地外就在室外地坪上下小幅浮动（实测建筑南侧最高只差 4 mm），
+ * 于是地形被切成一片孤立的"浮岛"，人视图里看着像悬空的碎板。 */
+const BUILDING_MATS = [M.wall, M.slab, M.roof, M.column, M.ramp, M.glass, M.handle];
+const gradeClipPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+let gradeClipOn = false;
+function setGradeClip(on, gradeY) {
+  renderer.localClippingEnabled = true;
+  gradeClipOn = !!on && isFinite(gradeY);
+  if (gradeClipOn) gradeClipPlane.constant = -(gradeY - 10);
+  for (const m of BUILDING_MATS) m.clippingPlanes = gradeClipOn ? [gradeClipPlane] : null;
+}
 
 function makeGroup(name) {
   const g = new THREE.Group();
@@ -945,6 +968,114 @@ function buildEnv(sc, focus) {
   return true;
 }
 
+/* ---------------- 道路 / 护坡（总平面图 DLSS 图层） ----------------
+ * 纯几何在 js/siteworks.js（WMSite）：DLSS 面是一块实体（顶面在建筑范围内 = 室外地坪，
+ * 范围外跟随地形并抬离 50 mm、5 m 内与建筑周边齐平），护坡由坡顶（室外地坪）降到地形/河床面。
+ * 道路高程取自环境地形网格，因此必须先建环境；未建时退化为平地标高并在告警里提示。
+ */
+const SITE_GROUPS = ['road', 'slope'];
+
+function siteStatsText(st) {
+  if (!st) return '未载入';
+  const lines = [];
+  if (st.road) lines.push(`DLSS 面（道路）${fmt(st.road.areaM2)} m² · 顶面 ${st.road.topMinZmm} ~ ${st.road.topMaxZmm} mm（起伏 ${fmt(st.road.topDropMm)}）`);
+  if (st.slope && st.slope.length) {
+    const s = st.slope[0];
+    lines.push(`护坡 ${st.slope.length} 块 · 落差 ${fmt(s.dropMm)} mm · 最小厚 ${fmt(s.thkMinMm)} mm`);
+  }
+  return lines.join('<br>');
+}
+
+function clearSite() {
+  for (const name of SITE_GROUPS) {
+    const g = state.groups[name];
+    if (!g) continue;
+    g.traverse(o => { if (o.geometry) o.geometry.dispose(); });
+    scene.remove(g);
+    state.groups[name] = null;
+    delete state.groups[name];
+  }
+  state.siteOn = false; state.siteStats = null; state.siteResult = null;
+  const el = document.getElementById('siteStats');
+  if (el) el.textContent = '未载入';
+}
+
+function buildSite(sc, focus) {
+  if (!sc) return false;
+  const sw = window.WMSite;
+  if (!sw) { warn('道路/护坡：js/siteworks.js 未载入'); return false; }
+  if (!state.levels || !state.wallAabb) { warn('道路/护坡：建筑尚未生成，无法对位'); return false; }
+  if (!state.envOn || !state.envField) warn('道路/护坡：未载入周边环境，道路按室外地坪拉平（高程不贴地形）');
+  clearSite();
+  let out = null;
+  try {
+    out = sw.build({
+      data: sc, THREE: THREE, level: state.levels,
+      wallAabb: state.wallAabb, params: sw.resolveParams(sc.siteWorks),
+      envBox: state.envBounds ? { x0: state.envBounds.x0, x1: state.envBounds.x1, y0: state.envBounds.z0, y1: state.envBounds.z1 } : null,
+      groundZ: function (x, y) {
+        if (!state.envField || !window.WMEnv) return null;
+        const v = window.WMEnv.sampleSurface(state.envField, x, y);
+        return isFinite(v) ? v : null;
+      },
+    });
+  } catch (e) {
+    warn('场地/道路/护坡生成失败：' + e.message);
+    console.error(e);
+    return false;
+  }
+  const groups = { road: makeGroup('road'), slope: makeGroup('slope') };
+  const geos = [[groups.road, out.roadGeo, M.road]];
+  for (const [g, geo, mat] of geos) {
+    if (!geo || !geo.attributes.position.count) continue;
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.receiveShadow = true;
+    g.add(mesh);
+  }
+  const slopeGeos = out.slopeGeos || (out.slopeGeo ? [out.slopeGeo] : []);
+  for (const geo of slopeGeos) {
+    if (!geo.attributes.position.count) continue;
+    const mesh = new THREE.Mesh(geo, M.slope);
+    mesh.receiveShadow = true;
+    groups.slope.add(mesh);
+  }
+  /* 顶面轮廓线并入环境线（同一根线控开关） */
+  let gl = state.groups.envLines;
+  if (!gl && (out.lines || []).length) gl = makeGroup('envLines');
+  if (gl) {
+    for (const ln of out.lines || []) {
+      if (ln.pts.length < 2) continue;
+      const pts = ln.pts.map(p => new THREE.Vector3(p[0], p[1], p[2]));
+      const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), M.envLine);
+      line.userData.env = true;
+      state.auxLines.push(line);
+      gl.add(line);
+    }
+  }
+
+  state.siteResult = out;
+  state.siteStats = {
+    road: out.roadStats || null,
+    slope: out.slopeStats || [],
+    params: out.params,
+  };
+  state.siteOn = true;
+
+  for (const m of out.warnings) warn(m);
+  log(`道路/护坡：DLSS 面 ${out.roadStats ? fmt(out.roadStats.areaM2) + ' m²（' + out.roadStats.tris + ' 三角）' : '—'} · 护坡 ${(out.slopeStats || []).length} 块`);
+  const chk = { chk_road: 'road', chk_slope: 'slope' };
+  for (const id in chk) {
+    const el = document.getElementById(id);
+    if (el) el.checked = true;
+  }
+  const elStats = document.getElementById('siteStats');
+  if (elStats) elStats.innerHTML = siteStatsText(state.siteStats);
+  renderScenePanel();
+  if (focus && state.envOn) applyView('env-iso');
+  else renderer.render(scene, camera);
+  return true;
+}
+
 /* ---------------- 视图预设（由建筑包围盒推导，适配任意 JSON） ---------------- */
 const VIEW_NAMES = [
   'iso-ne', 'iso-nw', 'iso-se', 'iso-sw',
@@ -1019,13 +1150,7 @@ function applyView(name) {
   camera.position.set(pos[0], pos[1], pos[2]);
   controls.target.set(target[0], target[1], target[2]);
   controls.update();
-  /* 人视视角模拟真实照片：裁掉室外地坪以下的基础 / 集水坑等地下构件
-   * （地面板就在 grade 高度，裁剪面下移 10mm 避免边界抖动） */
-  if (name.indexOf('persp-') === 0 && state.levels) {
-    renderer.clippingPlanes = [new THREE.Plane(new THREE.Vector3(0, 1, 0), -(gradeY - 10))];
-  } else {
-    renderer.clippingPlanes = [];
-  }
+  setGradeClip(name.indexOf('persp-') === 0, state.levels && state.levels.grade);
   afterCameraMove();
   renderer.render(scene, camera);
   return true;
@@ -1037,7 +1162,7 @@ window.WMShot = {
   views: function () { return VIEW_NAMES.slice(); },
   view: applyView,
   cam: function (px, py, pz, tx, ty, tz) {
-    renderer.clippingPlanes = [];
+    setGradeClip(false);
     camera.position.set(px, py, pz);
     controls.target.set(tx, ty, tz);
     controls.update();
@@ -1074,6 +1199,24 @@ window.WMShot = {
       counts: c,
       warnings: state.warnings.slice(),
     });
+  },
+  /* 场地/道路/护坡接口：载入 / 清除 / 读取统计 */
+  site: function () {
+    return JSON.stringify({ on: state.siteOn, stats: state.siteStats });
+  },
+  loadSite: function (sc) { return buildSite(sc || state.siteContext); },
+  clearSite: clearSite,
+  /* 场地/道路/护坡验收指标（顶面标高 / 厚度 / 道路抬升与贴地自检） */
+  siteCheck: function () {
+    if (!state.siteOn || !state.siteResult) return JSON.stringify({ on: false });
+    const res = window.WMSite.siteCheck({
+      result: state.siteResult, level: state.levels,
+      platformZ: state.envField ? state.envField.platformZ : null,
+    });
+    res.on = true;
+    res.params = res.params;
+    res.warnings = state.warnings.slice();
+    return JSON.stringify(res);
   },
   scenes: function () {
     return JSON.stringify({
@@ -1147,7 +1290,7 @@ function captureScene(name) {
     name: String(name || ('场景 ' + (arr.length + 1))),
     pos: camera.position.toArray().map(v => Math.round(v)),
     target: controls.target.toArray().map(v => Math.round(v)),
-    clip: renderer.clippingPlanes.length > 0,
+    clip: gradeClipOn,
   });
   writeScenes(arr);
   return arr;
@@ -1155,9 +1298,7 @@ function captureScene(name) {
 function applyScene(scn) {
   if (!scn || !scn.pos || !scn.target) return false;
   const g = state.levels ? state.levels.grade : null;
-  renderer.clippingPlanes = (scn.clip && g !== null)
-    ? [new THREE.Plane(new THREE.Vector3(0, 1, 0), -(g - 10))]
-    : [];
+  setGradeClip(!!scn.clip, g);
   camera.position.set(scn.pos[0], scn.pos[1], scn.pos[2]);
   controls.target.set(scn.target[0], scn.target[1], scn.target[2]);
   controls.update();
@@ -1240,7 +1381,6 @@ function buildModel(json, extras) {
     canopies: makeGroup('canopies'),
     stairs: makeGroup('stairs'),
     extra: makeGroup('extra'),
-    ground: makeGroup('ground'),
     families: makeGroup('families'),
     annot: makeGroup('annot'),
   };
@@ -1410,26 +1550,7 @@ function buildModel(json, extras) {
     addBox(G.extra, s.x0, s.y0, s.x1, s.y1, zB, zB + 100, M.slab);
   }
 
-  /* ---- 地面 + 散水 ---- */
-  const gx0 = wb.x0, gy0 = wb.y0, gx1 = wb.x1, gy1 = wb.y1;
-  const groundOffset = 5000;
-  const groundInner = [
-    { x: gx0, y: gy0 }, { x: gx1, y: gy0 },
-    { x: gx1, y: gy1 }, { x: gx0, y: gy1 },
-  ];
-  const groundOuter = [
-    { x: gx0 - groundOffset, y: gy0 - groundOffset }, { x: gx1 + groundOffset, y: gy0 - groundOffset },
-    { x: gx1 + groundOffset, y: gy1 + groundOffset }, { x: gx0 - groundOffset, y: gy1 + groundOffset },
-  ];
-  const groundThickness = 300;
-  const gz0 = L.grade - groundThickness, gz1 = L.grade;
-  addBox(G.ground, gx0 - groundOffset, gy0 - groundOffset, gx1 + groundOffset, gy0, gz0, gz1, M.ground);
-  addBox(G.ground, gx0 - groundOffset, gy1, gx1 + groundOffset, gy1 + groundOffset, gz0, gz1, M.ground);
-  addBox(G.ground, gx0 - groundOffset, gy0, gx0, gy1, gz0, gz1, M.ground);
-  addBox(G.ground, gx1, gy0, gx1 + groundOffset, gy1, gz0, gz1, M.ground);
-  addLineLoop(G.ground, groundOuter, L.grade + 10);
-  addLineLoop(G.ground, groundInner, L.grade + 10);
-  log(`地面/散水：内轮廓 ${fmt(gx0)}×${fmt(gy0)} - ${fmt(gx1)}×${fmt(gy1)}，外偏 ${fmt(groundOffset)} mm，厚 ${fmt(groundThickness)} mm`);
+  /* 地面/散水已删除：建筑周边地面改由「总平面图 DLSS 图层」生成的 DLSS 面承担（js/siteworks.js） */
 
   /* ---- 房间轮廓 + 标注 ---- */
   const roomSeen = new Set();
@@ -1526,11 +1647,11 @@ function buildModel(json, extras) {
     if (Math.abs(door.nx) > Math.abs(door.ny)) {
       const wallX = door.cx + door.nx * door.tw / 2;
       addRampWedge(G.extra, wallX, door.nx > 0 ? 1 : -1, rampL, door.cy, rampW,
-                   L.grade, L.south, M.ground, false);
+                   L.grade, L.south, M.ramp, false);
     } else {
       const wallY = door.cy + door.ny * door.tw / 2;
       addRampWedge(G.extra, wallY, door.ny > 0 ? 1 : -1, rampL, door.cx, rampW,
-                   L.grade, L.south, M.ground, true);
+                   L.grade, L.south, M.ramp, true);
     }
   }
 
@@ -1649,7 +1770,7 @@ function bindUI() {
     const view = p.get('view');
     const ch = p.get('channel');
     if (p.get('env') === '1') {
-      if (state.siteContext) buildEnv(state.siteContext, !view);
+      if (state.siteContext) { buildEnv(state.siteContext, !view); buildSite(state.siteContext); }
       else warn('周边环境：未找到数据（data/site-context.json 内嵌副本缺失）');
     }
     if (view) applyView(view);
@@ -1667,7 +1788,7 @@ function bindUI() {
       if (extras.siteContext) state.siteContext = extras.siteContext;
       state.modelBuilt = true;
       applyUrlParams();
-      if (keepEnv && state.siteContext && !state.envOn) buildEnv(state.siteContext);
+      if (keepEnv && state.siteContext && !state.envOn) { buildEnv(state.siteContext); buildSite(state.siteContext); }
       controls.update();
       renderer.render(scene, camera);   /* 立即渲染一帧，保证截图/首帧可见 */
       stats.innerHTML =
@@ -1714,8 +1835,9 @@ function bindUI() {
   const chkMap = {
     chk_walls: 'walls', chk_slabs: 'slabs', chk_columns: 'columns',
     chk_roof: 'roof', chk_canopies: 'canopies', chk_stairs: 'stairs', chk_extra: 'extra',
-    chk_ground: 'ground', chk_families: 'families', chk_annot: 'annot',
+    chk_families: 'families', chk_annot: 'annot',
     chk_terrain: 'terrain', chk_riverbed: 'riverBed', chk_water: 'riverWater', chk_envlines: 'envLines',
+    chk_road: 'road', chk_slope: 'slope',
   };
   for (const id in chkMap) {
     const el = document.getElementById(id);
@@ -1784,6 +1906,7 @@ function bindUI() {
       }
       if (!sc) { showError('未找到周边环境数据（data/site-context.json 或页面内嵌副本）'); return; }
       buildEnv(sc, true);
+      buildSite(sc);
     });
   }
   if (envFileBtn && envFileInput) {
@@ -1797,13 +1920,16 @@ function bindUI() {
           const sc = JSON.parse(reader.result);
           state.siteContext = sc;
           buildEnv(sc, true);
+          buildSite(sc);
         } catch (e) { showError('周边环境 JSON 解析失败：' + e.message); }
       };
       reader.onerror = () => showError('周边环境文件读取失败');
       reader.readAsText(f, 'utf-8');
     });
   }
-  if (envClearBtn) envClearBtn.addEventListener('click', () => { clearEnv(); renderScenePanel(); renderer.render(scene, camera); });
+  if (envClearBtn) envClearBtn.addEventListener('click', () => {
+    clearEnv(); clearSite(); renderScenePanel(); renderer.render(scene, camera);
+  });
 
   /* 默认尝试加载示例 JSON */
   (async function loadDefault() {

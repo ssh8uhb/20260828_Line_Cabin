@@ -4,10 +4,11 @@
 作为技术路线 **DWG → JSON → 白模 → 扩散模型渲染效果图** 的第三段；最终形态是桌面端 `.exe`，
 不要求用户安装 Blender。
 
-当前版本：**v0.3.0**（多视角预设 / depth·normal 出图通道 / 批量出图 / 线稿通道 / 门窗参数化族 / 挑檐放样 / 地形导入）。
-v0.3.0 之后新增（**待提交**）：**周边环境渲染**——由总平面图对位数据插值出地形面 / 河床面 / 水面，
-面板「载入周边环境（默认数据）」或 `?env=1` 载入，新增「周边鸟瞰 / 河道视角」两个视角预设
-（见 docs/DATA-MODEL.md 第 12、13 节）。
+当前版本：**v0.4.0**（2026-09-25，tag `v0.4.0`）。v0.3.0 之后新增：**周边环境渲染**——由总平面图对位数据插值出
+地形面 / 河床面 / 水面，面板「载入周边环境（默认数据）」或 `?env=1` 载入，新增「周边鸟瞰 / 河道视角」两个视角预设；
+**道路 / 护坡**——按总平面图 `DLSS` / `DLSS-斜坡` 图层生成（DLSS 整环只出一块实体，材质 `road`，
+面板两个开关；场地轮廓只作顶面高程分界、不出实体），原「地面 / 散水」实体已删除
+（见 docs/DATA-MODEL.md 第 12、13、14 节）。
 
 ## 目录
 
@@ -18,6 +19,7 @@ white-model-viewer/     白模查看器（主交付物）
   js/families.js        门窗参数化族（通用占位，等 CAD 大样替换）
   js/eaves.js           挑檐截面沿路径放样
   js/environment.js     周边环境：地形面 / 河床面 / 水面
+  js/siteworks.js       道路 / 护坡（总平面图 DLSS、DLSS-斜坡 图层）
   js/terrain.js         地形 OBJ 导入 + 双控制点配准（未接线）
   lib/                  three.js r128 + OrbitControls（本地依赖）
   data/                 示例 JSON、挑檐/雨篷截面、场地环境数据（site-context.json）
@@ -36,7 +38,7 @@ AGENTS.md               仓库工作约定（面向接手的 AI Agent）
 ```powershell
 python -m http.server 8123 --directory D:/Work/Project/20260828_Line_Cabin
 # → http://localhost:8123/white-model-viewer/
-# 出图参数：?static=1 固定视角、?lines=1 叠加线稿、?annot=0 去标注、?env=1 载入周边环境、
+# 出图参数：?static=1 固定视角、?lines=1 叠加线稿、?annot=0 去标注、?env=1 载入周边环境（含道路/护坡）、
 #            ?view=iso-ne 等视角预设（含 env-iso/env-river）、?channel=color/depth/normal、?bg=ffffff 背景色
 ```
 
@@ -52,7 +54,7 @@ node white-model-viewer/tools/cdp-shot.mjs "http://localhost:8123/white-model-vi
 | --- | --- |
 | [docs/PROJECT-HANDOFF.md](docs/PROJECT-HANDOFF.md) | 项目目标、当前实现、图纸事实、假设清单、限制与风险（**接手先读**） |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | 下一步任务、素材交付规格与验收标准 |
-| [docs/DATA-MODEL.md](docs/DATA-MODEL.md) | JSON → 白模生成说明：参数读取规则、图元映射、默认形状与默认数值总表、坐标与标高约定、场地环境对位（§12）、周边环境渲染（§13） |
+| [docs/DATA-MODEL.md](docs/DATA-MODEL.md) | JSON → 白模生成说明：参数读取规则、图元映射、默认形状与默认数值总表、坐标与标高约定、场地环境对位（§12）、周边环境渲染（§13）、道路/护坡（§14） |
 | [docs/SESSION-NOTES-2026-08-28.md](docs/SESSION-NOTES-2026-08-28.md) | 需求演变与关键决策纪要 |
 | [white-model-viewer/README.md](white-model-viewer/README.md) | 查看器使用说明与素材交付规格 |
 | [AGENTS.md](AGENTS.md) | 仓库工作约定（命令、Git 规则、维护约束） |

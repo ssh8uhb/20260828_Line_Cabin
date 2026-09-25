@@ -7,8 +7,9 @@
  * 约定（与 docs/DATA-MODEL.md 第 12 节一致）:
  *   单位 mm；平面 X/Y 与查看器 JSON 同一套坐标，Z = 绝对标高×1000 − 166759（与白模同一个 Z）
  *   地形范围 = 模型墙体 AABB 每侧外扩 params.marginMm，边界对齐到网格
- *   平台（场平）= 墙体 AABB 外扩 params.platformOffsetMm，面高 = 室外地坪 − params.platformSinkMm
- *     （= 现有散水底面，散水正好坐在上面；建筑外墙 AABB 内部挖空，否则会把下沉的水泵间埋掉）
+ *   平台（场平）= 场地轮廓（site-context 的 site.outlineModelMm，DLSS 场地）内部压平，
+ *     面高 = 室外地坪 − params.platformSinkMm（= DLSS 面底面，js/siteworks.js 的 roadThkMm 500
+ *     正好坐在上面）；建筑外墙 AABB 内部挖空，否则会把下沉的水泵间埋掉
  *   主河槽 = riverChannel.mainChannel.bankIds 两条岸线之间；河床由槽内高程点插值，
  *     槽内底面取 min(河床, 地面) 并往两岸平滑过渡，保证河道永远低于两侧地面、不出现假土包
  *   水面 = 河床最低点 + params.waterDepthMm，并被「较低岸顶 − params.waterClampMm」压住，
@@ -24,8 +25,7 @@
 const DEFAULT_PARAMS = {
   marginMm: 60000,          // 地形范围：墙体 AABB 每侧外扩
   gridMm: 1500,             // 地形网格间距
-  platformOffsetMm: 5000,   // 场平范围：墙体 AABB 外扩（与现有散水一致）
-  platformSinkMm: 300,      // 平台面 = 室外地坪 − 该值（= 散水厚度）
+  platformSinkMm: 500,      // 平台面 = 室外地坪 − 该值（= DLSS 面厚度 roadThkMm，面正好坐在平台上）
   idwPower: 2,
   idwK: 12,                 // IDW 参与的最近点数
   despikeMm: 600,           // 3×3 中值去刺阈值
@@ -146,6 +146,15 @@ function splitCellOutsideRect(x0, y0, x1, y1, rect) {
   return out;
 }
 const insideRect = (x, y, rect) => (x > rect.x0 && x < rect.x1 && y > rect.y0 && y < rect.y1);
+/* 点是否在闭合折线（[[x,y],...]）内：射线法 */
+function pointInRing(ring, x, y) {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const a = ring[i], b = ring[j];
+    if (((a[1] > y) !== (b[1] > y)) && (x < (b[0] - a[0]) * (y - a[1]) / (b[1] - a[1]) + a[0])) inside = !inside;
+  }
+  return inside;
+}
 
 /* ---------------- 主河槽骨架 ---------------- */
 /* 沿 bankIds[0] 逐顶点向 bankIds[1] 求最近点取中点得到中心线，再按 corridorStationMm 重采样成断面。
@@ -272,11 +281,13 @@ function buildField(ctx) {
   const hole = new Uint8Array(vw * vh);
   const depth = new Float32Array(vw * vh);
 
-  const platformRect = {
-    x0: wall.x0 - params.platformOffsetMm, x1: wall.x1 + params.platformOffsetMm,
-    y0: wall.y0 - params.platformOffsetMm, y1: wall.y1 + params.platformOffsetMm,
-  };
   const platformZ = ctx.level.grade - params.platformSinkMm;
+  /* 压平范围必须与场地轮廓一致 —— 早先用「墙体 AABB 外扩 platformOffsetMm」的矩形，
+     矩形越出场地轮廓到河道一侧，把岸坡抬成 1.2 m 高的台地（实测 +1238 mm / 108 m²）
+     并啃出 −491 mm 的凹坑，与护坡、地形互相穿插成碎片。改成按场地轮廓逐点判断。 */
+  const siteRing = (ctx.data && ctx.data.site && Array.isArray(ctx.data.site.outlineModelMm) &&
+                    ctx.data.site.outlineModelMm.length >= 3) ? ctx.data.site.outlineModelMm : null;
+  if (!siteRing) warnings.push('site-context 里没有场地轮廓（site.outlineModelMm），地形不做场平压平');
 
   /* 主河槽骨架 */
   const mc = (ctx.data.riverChannel && ctx.data.riverChannel.mainChannel) || {};
@@ -305,11 +316,9 @@ function buildField(ctx) {
       const x = box.x0 + i * g;
       const idx = j * vw + i;
       if (insideRect(x, y, wall)) { hole[idx] = 1; }
-      if (x >= platformRect.x0 - 1e-6 && x <= platformRect.x1 + 1e-6 &&
-          y >= platformRect.y0 - 1e-6 && y <= platformRect.y1 + 1e-6) {
+      if (siteRing && pointInRing(siteRing, x, y)) {
         pin[idx] = 1;
         z[idx] = platformZ;
-        if (hole[idx]) continue;                       // 挖空区内不需要地形高程
         continue;
       }
       const land = idw(ptsOut, x, y, params.idwK, params.idwPower);
@@ -468,7 +477,7 @@ function buildField(ctx) {
   return {
     box: box, nx: nx, ny: ny, vw: vw, vh: vh, gridMm: g,
     z: z, pin: pin, hole: hole, depth: depth,
-    wall: wall, platformRect: platformRect, platformZ: platformZ,
+    wall: wall, platformRing: siteRing, platformZ: platformZ,
     frame: frame, bankIds: bankIds, ptsIn: ptsIn, ptsOut: ptsOut,
     stats: {
       box: box, nx: nx, ny: ny, verts: vw * vh, nanCount: nanCount,
@@ -783,7 +792,7 @@ function build(ctx) {
   };
   const push = (pts) => { if (pts && pts.length >= 2) lines.push({ pts: pts }); };
   push(rectLoop(box));
-  push(rectLoop(field.platformRect));
+  /* 场平轮廓线不再画：那里已被 DLSS 面盖住（道路/护坡的顶面轮廓由 js/siteworks.js 出线） */
   push(rectLoop(field.wall));
   const pool = ctx.data.intakePool && ctx.data.intakePool.boundsModelMm;
   if (pool) push(rectLoop(pool));
