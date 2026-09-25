@@ -1,6 +1,6 @@
 # 项目交接说明 — 线条小屋 / 建筑白模（20260828_Line_Cabin）
 
-> 交接版本：v0.4.0（tag `v0.4.0`，见 §2 与 §9）　最后更新：2026-09-25
+> 交接版本：v0.5.0（tag `v0.5.0`，见 §2 与 §9）　最后更新：2026-09-25
 > 面向对象：接手的 AI Agent（Codex / Cursor 等）与项目负责人。
 > 仓库工作约定见根目录 AGENTS.md；下一步任务见 docs/ROADMAP.md；数据映射见 docs/DATA-MODEL.md。
 
@@ -21,7 +21,7 @@ Blender 或其他建模软件**。
 第 1 段的前提是：JSON 由设计插件导出，字段有明确的业务含义（可解释、合理），只是缺少文档说明。
 因此遇到不确定字段时，**优先去问用户或对照 Flie/输入文件/PlanFundingDrawing_JSON说明.md，不要凭字段名猜**。
 
-## 2. 当前实现（v0.4.0 + AI 出图，后者待发版）
+## 2. 当前实现（v0.5.0：白模 + 周边环境 + AI 出图链路）
 
 主交付物是 white-model-viewer/，一个不依赖任何构建工具、可双击打开的单页应用。
 
@@ -276,6 +276,8 @@ Lineart/Canny 条件时，清晰的棱边线能显著提高“几何不走形”
 | v0.2.0 | 5867b3a | 线稿通道、门窗参数化族、挑檐截面放样 + DXF 提取工具、地形导入 |
 | v0.3.0 | e9e43ab…273d642（tag `v0.3.0`，2026-09-25 补打） | 多视角预设（10）+ depth/normal 出图通道 + 批量出图（WMShot / cdp-shot 批量模式）+ 人视地坪裁剪 + ?annot=0 + 场景面板（8 固定场景 + 按图纸持久化的自定义镜头）+ 修复西/北墙窗框横穿墙厚凸出墙面（addPiece 左手基退化 + 双向门内侧把手越界）+ 门窗族几何自检 `WMShot.familyCheck()` |
 | v0.4.0 | 2026-09-25（tag `v0.4.0`） | 周边环境渲染：`js/environment.js`（高程点插值地形面 + 河床面 + 水面，去刺/平滑/坡度约束/平台挖空）、`?env=1` 与面板「载入周边环境（默认数据）」、env-iso / env-river 两个视角预设（共 12 个）、4 个显示控制复选框、`WMShot.env()/loadEnv()/clearEnv()/envCheck()`、site-context v2（`mainChannel` + `environment` 参数块，生成时同步内嵌副本）、河床/水面材质边界藏到水位之下（`bedUnderMm`，修掉 1.5 m 网格量化的阶梯色块）；<br>道路 / 护坡：`js/siteworks.js`（总平面图 `DLSS` / `DLSS-斜坡` 图层，整环只出一块实体）、`WMShot.site()/loadSite()/clearSite()/siteCheck()`、site-context v3（`site` / `roads` / `slopes` / `siteWorks`）、删除原「地面 / 散水」实体、**修掉场地与道路各建实体时交界处的棋盘格斜纹带**、**修掉护坡几何从未进场景的 bug**（`buildSlab` 的几何在 `regions[0].geo`，原先误取 `slab.geo` → 恒为 undefined）、**按用户要求删除场地实体**（分岛后场地边界闪锯齿状明暗斜带；DLSS 面改为整环一块实体、材质 `road`，面板只剩 road / slope 两个开关） |
+
+| v0.5.0 | 982a537（tag `v0.5.0`，2026-09-25 用户验收后打） | **AI 效果图链路**（白模 → 阿里云百炼 qwen-image → 效果图）：`tools/ai/dashscope.mjs` 调用层（同步图像接口 + `MODEL_CAPS` 能力表）、`tools/ai-render.mjs` CLI（`--views/--channels/--prompt/--dry-run/--mock/--yes`，复用 cdp-shot 截图）、`tools/ai-bridge.mjs` 本地桥（**只绑 127.0.0.1**，key 只从环境变量读、只在桥进程内存里、绝不回传页面）+ `js/ai-panel.js` 页面面板、`data/ai-render.json` 默认值（页面读 index.html 内嵌副本）、`start-ai-bridge.cmd` 双击起桥、提示词尾部 `--ar` 折算输出尺寸、产物 `out/<时间戳>|page-<时间戳>/{white,request,ai,run.json}`；<br>**左栏重构**：五栏互斥折叠（文件管理 / 模型列表 / 场景列表 / 显示样式 / 渲染出图，默认只展开第一栏）、标题与浏览器标签页统一为「生成效果图」、新增**显示样式**四选一（素模 / 线稿 / 深度 / 法线，线稿覆盖建筑 8 组 + 周边 terrain/riverBed/riverWater/road/slope）、删除重复控件（模型列表的线稿勾选框、渲染出图的条件图勾选框——页面出图固定送素模截图）、去掉出图通道下拉 / 构件数量统计栏 / 右下标高表（数量改由 `WMShot.stats()` 提供）、`WMShot` 新增 `style()`、`info()` 增加 `style/lines/edgeCounts` |
 
 提交信息格式：`<type>: <中文说明>`；里程碑同时打 tag 并推送。
 
