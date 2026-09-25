@@ -75,12 +75,12 @@
   并同步 index.html 内嵌副本；见 docs/DATA-MODEL.md 第 12 节）。
   一条岸可拆成多段首尾相接的 SXSS 折线，生成器按端点 0.5 m 容差自动拼成整条（`segments` 记段数）。
 - **✅ 已完成（v0.4.0）**：`js/environment.js` 消费该数据，生成**地形面 + 河床面 + 水面**，
-  面板「载入周边环境（默认数据）」或 `?env=1` 载入，新增「周边鸟瞰 / 河道视角」两个预设；
+  面板「文件管理」栏的 `载入环境文件` 或 `?env=1` 载入（**页面打开时已自动载入一次**），新增「周边鸟瞰 / 河道视角」两个预设；
   算法、参数、验收基线与已知问题见 docs/DATA-MODEL.md 第 13 节（要点：外墙 AABB 每侧外扩 60 m、
   1.5 m 网格、平台面 = `L.grade − 500`、水面 = 河床 + 水深 1 m、建筑范围挖空、槽外 30% 为岸坡过渡带）。
 - **✅ 已完成（v0.4.0）**：`js/siteworks.js` 用 `DLSS` / `DLSS-斜坡` 生成**道路 + 护坡**（DLSS 整环一块实体，
   材质 `road`；`site` 轮廓只作顶面高程分界与「建筑范围」判据，不出实体），
-  面板两个开关（road / slope），`WMShot.siteCheck()` 出验收指标，见 docs/DATA-MODEL.md 第 14 节。
+  面板「模型列表」栏两个开关（road / slope），`WMShot.siteCheck()` 出验收指标，见 docs/DATA-MODEL.md 第 14 节。
   原「地面 / 散水」回字形实体已按用户要求删除（与外圈 DLSS 面重叠、混淆）。
 - **👉 余下（下一步）**：① 按 `intakePool` 生成池体（现只画轮廓线，足迹落在主河槽内）；
   ② 陡坎、管道、注记按需加入（现只画线）；③ 场地外缘与总平面图东南侧「地面硬化」高程点的缓坡台阶，
@@ -110,7 +110,7 @@
 
 ### 2.2 depth / normal 通道导出 — ✅ v0.3.0 已完成
 
-- **实现**：页面内"出图通道"下拉（素模 / 深度 / 法线）或 `?channel=depth|normal`。
+- **实现**：`?channel=depth|normal`（原页面内的"出图通道"下拉已并入 2026-09-25 新增的「显示样式」栏：素模 / 线稿 / 深度 / 法线四选一）。
   depth 用自定义线性深度 ShaderMaterial（近白远黑、纯黑背景，比 MeshDepthMaterial 的非线性屏幕深度
   更适合 ControlNet Depth）；normal 用 MeshNormalMaterial（视空间法线，朝向面的 RGB ≈ 128,128,255）。
   两通道下线稿/标注自动隐藏，同一相机渲染，几何边界与素模严格对齐。
@@ -137,7 +137,8 @@
 - **用法**：
   CLI — `node tools/ai-render.mjs --views=iso-ne`（默认 1 视角 × 素模单图，不加 `--yes` 会先打印付费调用次数并要求确认）；
   `--channels=color,depth` 可加条件图（最多 3 张，顺序即图序）；`--dry-run` / `--mock` 零成本自检。
-  页面 — `node tools/ai-bridge.mjs` 起桥（`--mock` 可零成本），双击 `index.html`，在「AI 效果图」区域勾选视角、改提示词、点生成。
+  页面 — `node tools/ai-bridge.mjs` 起桥（`--mock` 可零成本），双击 `index.html`，在「渲染出图」栏勾选视角、改提示词、点生成
+  （条件图固定素模截图；要试 depth / normal 走 CLI `--channels=`）。
 - **输出**：`out/<时间戳>/{white,request,ai,run.json}`（页面桥为 `out/page-<时间戳>/`，run.json 记 `source`）——
   模型 / 参数 / requestId / 输入输出 sha256 / 长宽比偏差 / 付费次数。
 - **验收标准**：效果图与白模构图一致（轮廓 / 体量 / 屋面 / 门窗数量与位置不变），材质灯光天空配景明显变化，

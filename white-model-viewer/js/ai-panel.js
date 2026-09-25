@@ -127,14 +127,8 @@
   }
 
   /* ---------- 按钮 / 状态联动 ---------- */
-  function pickedChannels() {
-    const chs = ['color'];
-    for (const c of ['depth', 'normal']) {
-      const el = $('ai_ch_' + c);
-      if (el && el.checked) chs.push(c);
-    }
-    return chs;
-  }
+  /* 条件图固定用素模截图（面板不再提供深度 / 法线勾选；需要时走命令行 --channels=） */
+  const CHANNELS = ['color'];
   function syncGo() {
     const n = selected.size;
     const can = bridgeOK && keyPresent && n > 0 && !busy;
@@ -180,7 +174,7 @@
   async function generate() {
     const picked = Array.from(selected).map(k => views.find(v => v.key === k)).filter(Boolean);
     if (!picked.length) return;
-    const chans = pickedChannels();
+    const chans = CHANNELS.slice();
     const msg = `将向阿里云百炼发起 ${picked.length} 次付费调用（模型 ${cfg.model}，每次出 1 张图）。\n\n` +
       `视角：${picked.map(p => p.label).join(' / ')}\n条件图：${chans.join(' + ')}\n` +
       `截图尺寸：${cfg.captureSize || '1600*900'}\n\n继续？`;
@@ -255,10 +249,6 @@
     renderViews(); syncGo();
   });
   $('ai_none').addEventListener('click', () => { selected.clear(); renderViews(); syncGo(); });
-  for (const c of ['depth', 'normal']) {
-    const el = $('ai_ch_' + c);
-    if (el) el.addEventListener('change', syncGo);
-  }
   goBtn.addEventListener('click', generate);
 
   probe();

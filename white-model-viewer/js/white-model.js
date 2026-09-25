@@ -24,6 +24,8 @@ const state = {
   auxLines: [],        // 所有线条对象（辅助通道中隐藏）
   bounds: null,        // 建筑包围盒（视图预设用）
   levels: null,        // 标高表（视图预设用）
+  counts: null,        // 模型数量清单（WMShot.stats() 用）
+  edgeCounts: {},      // 各组线稿（棱边）对象数
   channel: 'color',    // 出图通道 color / depth / normal
   linesOn: false,      // 线稿开关状态
   labelsOn: true,      // 文字标注开关状态
@@ -42,7 +44,15 @@ const state = {
 };
 
 function log(msg) { state.log.push(msg); }
-function warn(msg) { state.warnings.push(msg); log('⚠ ' + msg); }
+function warn(msg) { state.warnings.push(msg); log('⚠ ' + msg); syncWarn(); }
+/* 告警只在「模型列表」栏末尾露一行，详情看 Console（面板不显示数量统计） */
+function syncWarn() {
+  const el = document.getElementById('warn');
+  if (!el) return;
+  const n = state.warnings.length;
+  el.style.display = n ? 'block' : 'none';
+  el.textContent = n ? `⚠ ${n} 条告警（Console 看详情）` : '';
+}
 
 /* ---------------- Three.js 初始化 ---------------- */
 let renderer, scene, camera, controls, sunLight;
@@ -717,17 +727,20 @@ function findHostWall(walls, cx, cy, w) {
   return null;
 }
 
-/* 线稿叠加通道：对主要实体组按二面角阈值（30°）提取棱边黑线，挂到各自 mesh 下 */
-function buildEdgeLines() {
-  const names = ['walls', 'slabs', 'columns', 'roof', 'canopies', 'stairs', 'extra', 'families'];
+/* 线稿：对所有实体组（建筑 + 周边地形 / 河床 / 水面 / 道路 / 护坡）按二面角阈值（30°）
+ * 提取棱边黑线，挂到各自 mesh 下。建筑组在建完模型时生成，周边组在载入环境/场地后生成 */
+const BUILDING_EDGE_GROUPS = ['walls', 'slabs', 'columns', 'roof', 'canopies', 'stairs', 'extra', 'families'];
+function buildEdgeLines(names) {
+  names = names || BUILDING_EDGE_GROUPS;
   const lineMat = new THREE.LineBasicMaterial({
     color: 0x000000,
     polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1,
   });
-  let n = 0;
+  if (!state.edgeCounts) state.edgeCounts = {};
   for (const name of names) {
     const grp = state.groups[name];
     if (!grp) continue;
+    let n = 0;
     grp.traverse(o => {
       if (!o.isMesh || !o.geometry || !o.geometry.attributes ||
           !o.geometry.attributes.position) return;
@@ -736,21 +749,56 @@ function buildEdgeLines() {
       catch (e) { return; }
       if (!edges.attributes.position.count) { edges.dispose(); return; }
       const ls = new THREE.LineSegments(edges, lineMat);
-      ls.visible = false;              /* 默认隐藏，勾选“线稿叠加”或 ?lines=1 时显示 */
+      ls.visible = state.linesOn && state.channel === 'color';   /* 显示样式切到「线稿」时显示 */
+      ls.userData.edge = true;
       o.add(ls);
       state.lineOverlays.push(ls);
       state.auxLines.push(ls);
       n++;
     });
+    state.edgeCounts[name] = n;
   }
-  state.lineCount = n;
+  state.lineCount = state.lineOverlays.length;
+}
+
+/* 清掉已随分组一起移除的线稿对象（重复载入环境 / 场地时用） */
+function dropDetachedOverlays() {
+  const alive = new Set();
+  for (const k in state.groups) {
+    const g = state.groups[k];
+    if (g) g.traverse(o => { if (o.userData && o.userData.edge) alive.add(o); });
+  }
+  state.lineOverlays = state.lineOverlays.filter(o => alive.has(o));
+  state.auxLines = state.auxLines.filter(o => !(o.userData && o.userData.edge) || alive.has(o));
+  state.lineCount = state.lineOverlays.length;
 }
 
 function setLinesVisible(on) {
   state.linesOn = !!on;
-  for (const ls of state.lineOverlays) ls.visible = state.linesOn;
-  const el = document.getElementById('chk_lines');
-  if (el) el.checked = state.linesOn;
+  for (const ls of state.lineOverlays) ls.visible = state.linesOn && state.channel === 'color';
+  syncStyleRadios();
+}
+
+/* ---------------- 显示样式（素模 / 线稿 / 深度 / 法线，四选一） ---------------- */
+const DISPLAY_STYLES = ['color', 'lines', 'depth', 'normal'];
+
+function currentStyle() {
+  if (state.channel === 'depth' || state.channel === 'normal') return state.channel;
+  return state.linesOn ? 'lines' : 'color';
+}
+
+function syncStyleRadios() {
+  const s = currentStyle();
+  for (const v of DISPLAY_STYLES) {
+    const el = document.getElementById('disp_' + v);
+    if (el) el.checked = (v === s);
+  }
+}
+
+function setDisplayStyle(style) {
+  if (DISPLAY_STYLES.indexOf(style) < 0) style = 'color';
+  if (style === 'lines') { setChannel('color'); setLinesVisible(true); }
+  else { setChannel(style); setLinesVisible(false); }
 }
 
 function setLabelsVisible(on) {
@@ -848,8 +896,7 @@ function setChannel(mode) {
       : (state.lineOverlays.indexOf(ls) >= 0 ? state.linesOn : true);
   }
   for (const s of state.labels) s.visible = !aux && state.labelsOn;
-  const sel = document.getElementById('sel_channel');
-  if (sel) sel.value = mode;
+  syncStyleRadios();
   if (renderer && scene && camera) renderer.render(scene, camera);
 }
 
@@ -858,25 +905,6 @@ function setChannel(mode) {
  * 纯数学与几何在 js/environment.js（WMEnv），这里只负责挂材质、建组与 UI 联动。
  */
 const ENV_GROUPS = ['terrain', 'riverBed', 'riverWater', 'envLines'];
-
-function envStatsText(sc, st) {
-  if (!st) return '未载入';
-  const c = st.counts || {};
-  const p = Math.abs(st.platform && st.platform.devMaxMm || 0);
-  const w = st.water || {};
-  const lines = [
-    `地形 ${c.terrainTris || 0} 三角 · 河床 ${c.bedTris || 0} · 水面 ${c.waterTris || 0}`,
-    `高程 ${st.zMinMm} ~ ${st.zMaxMm} mm · 最大坡 1:${st.slopeMax ? fmt(1 / st.slopeMax) : '—'} · 平台偏差 ${fmt(p)} mm`,
-  ];
-  if (w.stations) {
-    lines.push(`水面 ${w.surfMinMm} ~ ${w.surfMaxMm} mm · ${w.stations} 断面（岸顶限制 ${w.clamped}）`);
-  }
-  if (st.nanCount) lines.push(`⚠ ${st.nanCount} 个网格点插值失败`);
-  if (sc && sc.elevationPoints) {
-    lines.push(`高程点 ${sc.elevationPoints.count || (sc.elevationPoints.points || []).length} 个 · 数据 v${sc.version || 1}`);
-  }
-  return lines.join('<br>');
-}
 
 function clearEnv() {
   for (const name of ENV_GROUPS) {
@@ -888,10 +916,9 @@ function clearEnv() {
     delete state.groups[name];
   }
   state.auxLines = state.auxLines.filter(o => !(o.userData && o.userData.env));
+  dropDetachedOverlays();
   state.envOn = false; state.envStats = null; state.envBounds = null; state.envFrame = null;
   setShadowExtent(16000);
-  const el = document.getElementById('envStats');
-  if (el) el.textContent = '未载入';
 }
 
 function buildEnv(sc, focus) {
@@ -942,6 +969,8 @@ function buildEnv(sc, focus) {
     state.auxLines.push(line);
     groups.envLines.add(line);
   }
+  /* 线稿也要覆盖周边模型：地形 / 河床 / 水面各按二面角提棱边 */
+  buildEdgeLines(['terrain', 'riverBed', 'riverWater']);
 
   const b = out.field.box, st = out.stats;
   state.envStats = st;
@@ -958,8 +987,6 @@ function buildEnv(sc, focus) {
     if (el) el.checked = true;
   }
   setShadowExtent(90000);
-  const elStats = document.getElementById('envStats');
-  if (elStats) elStats.innerHTML = envStatsText(sc, out.stats);
   if (state.channel !== 'color') setChannel(state.channel);   /* 辅助通道下同步隐藏环境线 */
   renderScenePanel();
   /* 用户主动载入时直接切到周边鸟瞰，否则地形在地形盒外看不见（脚本载入不动相机） */
@@ -975,17 +1002,6 @@ function buildEnv(sc, focus) {
  */
 const SITE_GROUPS = ['road', 'slope'];
 
-function siteStatsText(st) {
-  if (!st) return '未载入';
-  const lines = [];
-  if (st.road) lines.push(`DLSS 面（道路）${fmt(st.road.areaM2)} m² · 顶面 ${st.road.topMinZmm} ~ ${st.road.topMaxZmm} mm（起伏 ${fmt(st.road.topDropMm)}）`);
-  if (st.slope && st.slope.length) {
-    const s = st.slope[0];
-    lines.push(`护坡 ${st.slope.length} 块 · 落差 ${fmt(s.dropMm)} mm · 最小厚 ${fmt(s.thkMinMm)} mm`);
-  }
-  return lines.join('<br>');
-}
-
 function clearSite() {
   for (const name of SITE_GROUPS) {
     const g = state.groups[name];
@@ -995,9 +1011,8 @@ function clearSite() {
     state.groups[name] = null;
     delete state.groups[name];
   }
+  dropDetachedOverlays();
   state.siteOn = false; state.siteStats = null; state.siteResult = null;
-  const el = document.getElementById('siteStats');
-  if (el) el.textContent = '未载入';
 }
 
 function buildSite(sc, focus) {
@@ -1053,6 +1068,8 @@ function buildSite(sc, focus) {
     }
   }
 
+  buildEdgeLines(['road', 'slope']);
+
   state.siteResult = out;
   state.siteStats = {
     road: out.roadStats || null,
@@ -1068,8 +1085,6 @@ function buildSite(sc, focus) {
     const el = document.getElementById(id);
     if (el) el.checked = true;
   }
-  const elStats = document.getElementById('siteStats');
-  if (elStats) elStats.innerHTML = siteStatsText(state.siteStats);
   renderScenePanel();
   if (focus && state.envOn) applyView('env-iso');
   else renderer.render(scene, camera);
@@ -1171,6 +1186,7 @@ window.WMShot = {
     return true;
   },
   channel: setChannel,
+  style: setDisplayStyle,
   /* 清掉 OrbitControls 的阻尼残余：AI 出图面板在摆机位之前调用，
    * 否则用户上一次拖拽的残余会在之后几帧里把机位推离预设。 */
   settle: function () {
@@ -1219,6 +1235,19 @@ window.WMShot = {
       name: state.drawingName || '', title: document.title, href: location.href,
       ready: !!state.modelBuilt, env: !!state.envOn, site: !!state.siteOn,
     });
+  },
+  /* 模型清单摘要（单行；面板不再显示统计栏，自检脚本读这里） */
+  stats: function () {
+    const c = state.counts;
+    const L = state.levels;
+    if (!c) return '尚未加载数据';
+    return [
+      state.drawingName || '未知图纸',
+      `图框 ${c.frames}`, `墙体 ${c.walls}`, `门 ${c.doors}`, `窗 ${c.windows}`,
+      `柱 ${c.columns}`, `楼梯 ${c.stairs}`,
+      L ? `标高 泵间 ${fmt(L.base)} / 配电 ${fmt(L.south)} / 屋面 ${fmt(L.roof)} mm` : '标高 —',
+      state.envOn ? '环境 已载入' : '',
+    ].filter(Boolean).join(' · ');
   },
   /* 周边环境接口：载入 / 清除 / 读取统计 */
   env: function () {
@@ -1283,6 +1312,9 @@ window.WMShot = {
   info: function () {
     return JSON.stringify({
       channel: state.channel,
+      style: currentStyle(),
+      lines: state.linesOn,
+      edgeCounts: state.edgeCounts,
       bounds: state.bounds,
       camera: { pos: camera.position.toArray(), target: controls.target.toArray(), fov: camera.fov },
     });
@@ -1715,6 +1747,11 @@ function buildModel(json, extras) {
     bx1 = Math.max(bx1, r.x1); by1 = Math.max(by1, r.y1);
   }
   state.levels = L;
+  state.counts = {
+    frames: (json.ViewFrames || []).length,
+    walls: data.walls.length, doors: data.doors.length, windows: data.windows.length,
+    columns: data.columns.length, stairs: data.steelStairs.length + (data.stair ? 1 : 0),
+  };
   state.bounds = {
     x0: bx0, x1: bx1, z0: by0, z1: by1,
     y0: data.sump ? Math.min(L.sump, L.base - 200) : L.base - 200,
@@ -1739,9 +1776,9 @@ function bindUI() {
   const fileInput = document.getElementById('fileInput');
   const loadBtn = document.getElementById('loadBtn');
   const dropzone = document.getElementById('dropzone');
-  const stats = document.getElementById('stats');
   const errEl = document.getElementById('err');
   const errMsg = document.getElementById('errMsg');
+  let envLoaded = false;   /* 首次建模后自动载入一次周边环境（用户要求默认载入环境文件） */
 
   function showError(msg) { errMsg.textContent = msg; errEl.style.display = 'flex'; }
 
@@ -1753,9 +1790,11 @@ function bindUI() {
     }
     for (const s of state.labels) scene.remove(s);
     state.groups = {}; state.labels = []; state.lineOverlays = []; state.auxLines = [];
+    state.edgeCounts = {}; state.lineCount = 0;
     state.envOn = false; state.envStats = null; state.envBounds = null;
     state.envFrame = null; state.envField = null;
     state.log = []; state.warnings = [];
+    syncWarn();
   }
 
   function syncRead(url) {
@@ -1834,22 +1873,19 @@ function bindUI() {
     state.drawingName = json.DrawingName || '';
     try {
       const extras = await resolveExtras();
-      const { data, L } = buildModel(json, extras);
+      buildModel(json, extras);
       if (extras.siteContext) state.siteContext = extras.siteContext;
       state.modelBuilt = true;
       applyUrlParams();
+      /* 默认文件：建筑白模之外，周边环境（地形 / 河床 / 水面 / 道路 / 护坡）也一并载入 */
+      if (!envLoaded && !state.envOn && state.siteContext) {
+        envLoaded = true;
+        buildEnv(state.siteContext, false);
+        buildSite(state.siteContext);
+      }
       if (keepEnv && state.siteContext && !state.envOn) { buildEnv(state.siteContext); buildSite(state.siteContext); }
       controls.update();
       renderer.render(scene, camera);   /* 立即渲染一帧，保证截图/首帧可见 */
-      stats.innerHTML =
-        `<b>${json.DrawingName || '未知图纸'}</b><br>` +
-        `图框 ${(json.ViewFrames || []).length} 个<br>` +
-        `墙体 ${data.walls.length} · 门 ${data.doors.length} · 窗 ${data.windows.length}<br>` +
-        `柱 ${data.columns.length} · 楼梯 ${data.steelStairs.length + (data.stair ? 1 : 0)}<br>` +
-        `标高：泵间 ${fmt(L.base)} / 配电 ${fmt(L.south)} / 屋面 ${fmt(L.roof)} mm` +
-        (state.warnings.length ? `<br><span style="color:#b23">${state.warnings.length} 条告警</span>` : '');
-      document.getElementById('legend').textContent =
-        'Z=0 水泵间地面 · ' + fmt(L.south) + ' 配电/控制间 · ' + fmt(L.roof) + ' 屋面 (mm)';
       dropzone.classList.remove('active');
     } catch (e) {
       showError('解析失败：' + e.message);
@@ -1897,9 +1933,18 @@ function bindUI() {
       if (chkMap[id] === 'annot') setLabelsVisible(el.checked);
     });
   }
-  const chkLines = document.getElementById('chk_lines');
-  if (chkLines) {
-    chkLines.addEventListener('change', () => setLinesVisible(chkLines.checked));
+  /* 显示样式：素模 / 线稿 / 深度 / 法线 四选一 */
+  for (const el of document.querySelectorAll('input[name=disp_style]')) {
+    el.addEventListener('change', () => { if (el.checked) setDisplayStyle(el.value); });
+  }
+
+  /* 折叠栏互斥：打开一栏时自动收起其它栏 */
+  const accs = document.querySelectorAll('#ui details.acc');
+  for (const d of accs) {
+    d.addEventListener('toggle', () => {
+      if (!d.open) return;
+      for (const o of accs) if (o !== d && o.open) o.open = false;
+    });
   }
 
   /* 全选 / 取消全选 */
@@ -1911,7 +1956,6 @@ function bindUI() {
         const el = document.getElementById(id);
         if (el) { el.checked = true; const g = state.groups[chkMap[id]]; if (g) g.visible = true; }
       }
-      if (chkLines) { chkLines.checked = true; setLinesVisible(true); }
       setLabelsVisible(true);
     });
   }
@@ -1921,15 +1965,9 @@ function bindUI() {
         const el = document.getElementById(id);
         if (el) { el.checked = false; const g = state.groups[chkMap[id]]; if (g) g.visible = false; }
       }
-      if (chkLines) { chkLines.checked = false; setLinesVisible(false); }
       setLabelsVisible(false);
     });
   }
-  const selChannel = document.getElementById('sel_channel');
-  if (selChannel) {
-    selChannel.addEventListener('change', () => setChannel(selChannel.value));
-  }
-
   const btnSceneSave = document.getElementById('btn_scene_save');
   if (btnSceneSave) {
     btnSceneSave.addEventListener('click', () => {

@@ -30,18 +30,18 @@ Blender 或其他建模软件**。
 | JSON 解析与坐标对齐 | js/white-model.js 的 parseDrawing() | 遍历 ViewFrames，按轴线 1 ∩ A 把三个图框对齐到同一坐标系，重复图元去重 |
 | 标高体系 | buildLevels() | 由 PlanElevationAnnotationObject 的 Kind 索引生成层高表，Z=0 = 水泵间地面 |
 | 参数化建模 | buildModel() | 墙体（含门窗洞口拆板）、楼板、结构柱、屋面、楼梯/钢梯/爬梯、基础/集水坑/坡道、房间标注 |
-| 素模 + 线稿双通道 | buildEdgeLines() / setLinesVisible() | 对实体按 30° 二面角阈值提取黑色棱边；覆盖 walls/slabs/columns/roof/canopies/stairs/extra/families 八个分组（新增实体分组时需同步该名单）；默认隐藏，可切换 |
+| 显示样式（素模/线稿/深度/法线） | setDisplayStyle() → setChannel() / setLinesVisible() | 面板「显示样式」栏四选一。线稿 = 对实体按 30° 二面角阈值提取黑色棱边：建筑八个分组（walls/slabs/columns/roof/canopies/stairs/extra/families，新增实体分组须同步 `BUILDING_EDGE_GROUPS`）+ 周边 terrain/riverBed/riverWater/road/slope；默认素模（无线稿），可随时切 |
 | 视角预设（12 个） | applyView() | iso-ne/nw/se/sw 鸟瞰、elev-s/n/w/e 立面、persp-1/2 人视（地坪 + 1700 视高，裁掉地坪以下构件）、env-iso/env-river 周边鸟瞰/河道视角（需载入周边环境）；由建筑包围盒自动推算，适配任意 JSON |
-| 场景面板 | renderScenePanel() / applyScene() | 左侧面板「场景（视角镜头）」：10 个固定场景（4 正立面 + 4 角部鸟瞰 + 周边鸟瞰/河道视角，后者未载入环境时置灰）+ 自定义镜头（存相机位置/目标点/裁剪状态）；按 `DrawingName` 分别写入 localStorage（键 `wm.scenes.v1:<DrawingName>`），不可用时退化为会话内存 |
-| 出图通道 | setChannel() / depthMaterial() | color 素模 / depth 线性深度（近白远黑，自定义 ShaderMaterial）/ normal 视空间法线（MeshNormalMaterial）；同一相机逐像素对齐，辅助通道自动隐藏线稿与标注（env 视角下深度跨度取「建筑 ∪ 地形盒」并集） |
-| 批量出图接口 | window.WMShot + tools/cdp-shot.mjs | 页面暴露 built/views/view/cam/channel/info/scenes/saveScene/applyScene/familyCheck/env/loadEnv/clearEnv/envCheck/site/loadSite/clearSite/siteCheck；脚本批量模式循环 视角 × 通道 截图并写 manifest.json（相机参数） |
+| 场景面板 | renderScenePanel() / applyScene() | 左侧面板「场景列表」栏：10 个固定场景（4 正立面 + 4 角部鸟瞰 + 周边鸟瞰/河道视角，后者未载入环境时置灰）+ 自定义镜头（存相机位置/目标点/裁剪状态）；按 `DrawingName` 分别写入 localStorage（键 `wm.scenes.v1:<DrawingName>`），不可用时退化为会话内存 |
+| 出图通道 | setChannel() / depthMaterial() | color 素模 / depth 线性深度（近白远黑，自定义 ShaderMaterial）/ normal 视空间法线（MeshNormalMaterial）；同一相机逐像素对齐，辅助通道自动隐藏线稿与标注（env 视角下深度跨度取「建筑 ∪ 地形盒」并集）。面板入口只有「显示样式」四选一，`?channel=` 与 `WMShot.channel()/style()` 供脚本使用 |
+| 批量出图接口 | window.WMShot + tools/cdp-shot.mjs | 页面暴露 built/views/view/cam/channel/style/info/doc/stats/scenes/saveScene/applyScene/capture/settle/familyCheck/env/loadEnv/clearEnv/envCheck/site/loadSite/clearSite/siteCheck；脚本批量模式循环 视角 × 通道 截图并写 manifest.json（相机参数） |
 | 门窗参数化族 | js/families.js | 6 个通用族，按 Kind 与宽度自动匹配，按洞口尺寸缩放、按墙向/法线定向；族内几何统一用洞口局部坐标 u/v/n（正 n 指向室内），`WMShot.familyCheck()` 逐块校核「构件不许凸出墙面」（样例基线 78 块 / 0 越界） |
 | 挑檐截面放样 | js/eaves.js + tools/dxf-profile.mjs | 截面沿屋面外轮廓矩形放样，角部按偏移处理；DXF 截面提取工具已就绪 |
 | 地形导入 | js/terrain.js | OBJ 三角网 + 双控制点相似变换（平移/旋转/等比缩放）+ 高程换算（未接线） |
 | 场地环境数据（总平面图对位） | tools/dxf-site-context.mjs → data/site-context.json（v3） | 由 `总平面图.dxf` 解析出模型↔总平面图对位变换（平移+旋转 3.2962°+×1000）、578 个高程点、进水池、麻桑河岸线、陡坎与注记，以及场地轮廓（DLSS 里含建筑的那一圈）/ 道路（DLSS 整环）/ 护坡（DLSS-斜坡）折线，全部换算为模型 mm 坐标；生成时同步 index.html 内嵌副本（见 docs/DATA-MODEL.md 第 12 节） |
-| 周边环境渲染（地形/河床/水面） | js/environment.js + white-model.js 的 buildEnv() | 用高程点插值生成地形面（去刺/平滑/坡度约束）、按槽内点插值出河床面、河床 + 水深生成水面；外墙 AABB 每侧外扩 60 m、平台面 = `L.grade − 500`、建筑范围挖空、地块四周 3 m 裙边；面板「载入周边环境（默认数据）」或 `?env=1` 载入，`WMShot.envCheck()` 出验收指标（见 docs/DATA-MODEL.md 第 13 节） |
+| 周边环境渲染（地形/河床/水面） | js/environment.js + white-model.js 的 buildEnv() | 用高程点插值生成地形面（去刺/平滑/坡度约束）、按槽内点插值出河床面、河床 + 水深生成水面；外墙 AABB 每侧外扩 60 m、平台面 = `L.grade − 500`、建筑范围挖空、地块四周 3 m 裙边；**页面首次建模后自动载入**（也保留「文件管理」栏的 `载入环境文件` 按钮与 `?env=1`），`WMShot.envCheck()` 出验收指标（见 docs/DATA-MODEL.md 第 13 节） |
 | 道路 / 护坡 | js/siteworks.js + white-model.js 的 buildSite() | DLSS 整环只出一块实体：顶面在场地轮廓（`site` 多边形）内严格齐平室外地坪、轮廓外跟随地形（5 m 过渡带内平滑回室外地坪、整体抬离自然地面 50 mm）；护坡 = `DLSS-斜坡` 环（场地标高斜到河床）。**早先按三角形重心把 DLSS 面分成「场地」「道路」两个材质岛、各建一块实体，交界处两片重合立侧面会闪棋盘格斜纹带（2026-09-24 修复）；分岛后场地边界上又出现锯齿状明暗斜带，2026-09-25 按用户要求删除场地实体**；厚度统一 500 mm，面板 road/slope 两个开关，`WMShot.siteCheck()` 出验收指标（见 docs/DATA-MODEL.md 第 14 节） |
-| 出图模式 | applyUrlParams() + STATIC | ?static=1 渲染数帧后停住；?env=1 载入周边环境（地形/河床/水面/道路/护坡，用内嵌副本，离线可用）；?lines=1 带线稿；?annot=0 去标注；?ui=0 只留三维画面（隐藏面板/提示条/标高表，AI 出图的条件图必须加）；?view= 视角预设；?channel= 出图通道；?bg=RRGGBB 设背景 |
+| 出图模式 | applyUrlParams() + STATIC | ?static=1 渲染数帧后停住；?env=1 载入周边环境（地形/河床/水面/道路/护坡，用内嵌副本，离线可用；**已经是页面默认行为**）；?lines=1 带线稿（等价面板「显示样式 → 线稿」）；?annot=0 去标注；?ui=0 只留三维画面（隐藏面板/提示条，AI 出图的条件图必须加）；?view= 视角预设；?channel= 出图通道（面板入口只有「显示样式」四选一，脚本用 URL 参数或 `WMShot.channel()`）；?bg=RRGGBB 设背景 |
 | 离线可用 | index.html 内嵌 #sampleData / #eavesProfileData / #siteContextData | 双击 file:// 打开即可看到示例白模；周边环境与场地数据也是内嵌副本，`?env=1` 离线可用 |
 | AI 出图（阶段③） | tools/ai-render.mjs（CLI）+ tools/ai-bridge.mjs + js/ai-panel.js（页面面板）+ tools/ai/dashscope.mjs（调用层）+ data/ai-render.json | 白模截图 → **阿里云百炼同步图像接口**（默认 `qwen-image-3.0`，1~3 张参考图）→ 效果图 + `run.json`；两条入口共用同一调用层：CLI 复用 `cdp-shot` 截图，页面面板由页面自己截图（`WMShot.capture`）后 POST 给**只绑 127.0.0.1** 的本地桥；提示词与参数默认值在 `data/ai-render.json`（页面读内嵌副本，见 docs/DATA-MODEL.md §5.7）；API key 只从环境变量读、只在桥进程内存里，`--dry-run` / `--mock` 可零成本自检，CLI 非 TTY 要 `--yes`、页面弹窗确认调用次数、桥 `--max-calls` 限会话调用数；异步接口（万相）与高清超分未实现 |
 
@@ -62,10 +62,10 @@ Blender 或其他建模软件**。
           → parseDrawing(json)   // 图元 → 中间数据结构 data（见 docs/DATA-MODEL.md）
           → buildLevels(data)    // 标高体系 L
           → 各构件建模，写入 9 个分组: walls/slabs/columns/roof/canopies/stairs/extra/families/annot
-          → buildEdgeLines()     // 线稿叠加通道（默认隐藏）
+          → buildEdgeLines(BUILDING_EDGE_GROUPS)   // 线稿（默认随「显示样式」开关显隐）
       → applyUrlParams(): 应用 ?env=1 / ?lines=1 / ?annot=0 / ?ui=0 / ?view= / ?channel= / ?bg=RRGGBB
-      → buildEnv(sc): 周边环境（WMEnv.build → 地形/河床/水面/环境线 4 个分组），模型重建后自动重载
-      → buildSite(sc): 道路/护坡（WMSite.build → road/slope 2 个分组），?env=1 时与 buildEnv 一起执行
+      → buildEnv(sc): 周边环境（WMEnv.build → 地形/河床/水面/环境线 4 个分组 + 三者的线稿），模型重建后自动重载
+      → buildSite(sc): 道路/护坡（WMSite.build → road/slope 2 个分组 + 线稿），?env=1 时与 buildEnv 一起执行
   → 用户可拖入其它 JSON 文件重新构建
 ```
 
@@ -121,8 +121,8 @@ base64 换成文件指纹）、`ai/`（效果图）、`run.json`（模型 / 参�
 # 终端 A：起本地桥（只绑 127.0.0.1；页面直连百炼会被 CORS 拦，key 也必须留在 Node 侧）
 $env:DASHSCOPE_API_KEY = "sk-xxxx"; node white-model-viewer/tools/ai-bridge.mjs          # 默认 http://127.0.0.1:8787
 $env:DASHSCOPE_API_KEY = "sk-xxxx"; node white-model-viewer/tools/ai-bridge.mjs --mock   # 零成本：本地假接口，结果图直接回显白模截图
-# 终端 B / 直接双击：打开 white-model-viewer/index.html → 左侧面板「AI 效果图（阶段③）」
-#   勾选视角（12 个预设 + 自定义镜头，`看` 只切机位不入队）→ 改提示词 → 生成效果图（N 次调用）
+# 终端 B / 直接双击：打开 white-model-viewer/index.html → 左侧面板「渲染出图」栏
+#   勾选视角（12 个预设 + 自定义镜头，`看` 只切机位不入队）→ 改提示词 → 生成效果图（N 次调用，条件图固定素模）
 ```
 
 桥的端点：`GET /health`、`GET /ai-render/config`（配置 + `keyPresent`，**不回传 key**）、`POST /ai-render`
@@ -130,17 +130,25 @@ $env:DASHSCOPE_API_KEY = "sk-xxxx"; node white-model-viewer/tools/ai-bridge.mjs 
 产物在 `out/page-<时间戳>/`（run.json 里 `source:"page"`，另记页面 URL 与图纸名）。
 
 URL 参数：?static=1 固定视角出图（渲染 8 帧后停止）；?env=1 载入周边环境（默认数据，用页面内嵌副本，
-离线可用）；?lines=1 叠加黑色线稿；?annot=0 隐藏房间标注；?ui=0 只留三维画面（隐藏左侧面板 / 底部提示条 /
-右下标高表；**AI 出图的条件图必须加**，否则模型会把面板文字一起画进效果图）；
+离线可用；**页面打开时已自动载入，加不加都一样**）；?lines=1 叠加黑色线稿；?annot=0 隐藏房间标注；
+?ui=0 只留三维画面（隐藏左侧面板与底部提示条；**AI 出图的条件图必须加**，否则模型会把面板文字一起画进效果图）；
 ?view=iso-ne 等切换 12 个视角预设（iso-ne/nw/se/sw、elev-s/n/w/e、persp-1/2、env-iso/env-river）；?channel=color/depth/normal
 切换出图通道；?bg=ffffff 背景色（6 位 hex）。人视视角（persp-*）自动用地坪裁剪面隐藏室外地坪以下的
 基础/集水坑；批量模式下 window.WMShot 驱动 live 页面，manifest.json 记录每张图的相机参数便于跨版本比对。
 
-### 关于线稿通道与 AI 出图
+左上角标题与浏览器标签页标题（`<title>`）都是「生成效果图」，面板分五栏折叠，默认只展开「文件管理」，
+且**同时只展开一栏**（打开新的自动收起旧的，`details` 的 toggle 事件实现）：
+**文件管理**（载入建筑文件 / 载入环境文件 / 选择文件… / 清除环境）、**模型列表**（构件与环境的显示开关，
+底部只显示告警条数）、**场景列表**（10 固定场景 + 自定义镜头）、**显示样式**（素模 / 线稿 / 深度 / 法线 四选一）、
+**渲染出图**（出图场景选择 / 提示词 / 生成效果图）。面板不再显示构件数量统计与右下标高表；自检脚本读 `WMShot.stats()`。
+
+### 关于线稿与 AI 出图
 
 线稿（黑线）对扩散模型的作用是**增强结构可读性**，属于可选通道，不是必需：ControlNet 类模型用
 Lineart/Canny 条件时，清晰的棱边线能显著提高“几何不走形”的概率；纯 img2img 或 depth 条件时，素模本身已够用。
-因此实现上保持“素模默认 + 线稿可切”，出图时按所选扩散模型的条件类型决定是否叠加。
+因此实现上保持“素模默认 + 线稿可切”（面板「显示样式」栏，线稿覆盖建筑与周边环境全部模型）。
+页面出图固定送素模截图（`channels: ["color"]`）；要试 depth / normal 条件就走命令行
+`node tools/ai-render.mjs --channels=color,depth[,normal]`（最多 3 张参考图）。
 
 ## 5. 从 JSON 中解析出的图纸事实（事实，非假设）
 
@@ -152,7 +160,7 @@ Lineart/Canny 条件时，清晰的棱边线能显著提高“几何不走形”
 - **建筑外包**：7200 × 15100（mm），外墙厚 200（由 WallObject.Outline 直接得出，非假设）。
 - **标高体系**（绝对标高，mm）：水泵间地面 166759（= 建模 Z 0）、配电/控制间 169200（+2441）、
   室外地坪 168900（+2141）、屋面 173800（+7041）、钢梯平台 167659（+900）、集水坑底 165259（-1500）。
-- **构件统计**（页面统计栏实时显示）：图框 3、墙体 6、门 5、窗 7、柱 8（400×400）、楼梯 4（钢梯 3 + 建筑楼梯 1）、
+- **构件统计**（Console 读 `JSON.stringify(WMShot.stats())`；面板按用户要求已去掉统计栏）：图框 3、墙体 6、门 5、窗 7、柱 8（400×400）、楼梯 4（钢梯 3 + 建筑楼梯 1）、
   钢爬梯 1、坡道 3、基础 4、集水坑 1、雨水管 6、雨篷 3。
 - **门窗清单**（尺寸与编号均直接读自 JSON，非假设）：
 
@@ -224,7 +232,8 @@ Lineart/Canny 条件时，清晰的棱边线能显著提高“几何不走形”
 - **墙体按轴对齐矩形（AABB）处理**：由 Outline 的 min/max 得到矩形，**不支持斜墙/异形墙**；若后续样本出现斜墙，需要改成多边形与定向开洞。
 - **不做布尔运算**：墙体开洞用“沿墙区间 + 高度区间”的参数化拆板实现，避免依赖 CSG 库；
   洞口若跨越多个墙段或与墙端过近，可能出现拆板边界不理想。
-- **线稿是几何棱边**：按 30° 二面角阈值生成，不是工程制图的投影线（看不到被遮挡轮廓），出图效果以实际观感为准。
+- **线稿是几何棱边**：按 30° 二面角阈值生成，不是工程制图的投影线（看不到被遮挡轮廓），出图效果以实际观感为准；
+  地形 / 道路这类近似光滑的大面只有边界与陡坡处出线，不会满屏噪声（分组建线稿，重复载入环境时旧线稿随分组回收）。
 - **单一样本**：目前只验证过一个 JSON 样本，字段假设（如 Kind 含义、轴线编号）尚未在第二个项目上验证。
 - **未使用的图元类型**：parseDrawing 会统计未处理类型（data.unknown），当前样本里包含
   BottomStairFlightObject、RoofHatchObject、DrainageTrenchObject、BreakLineObject、Intake* 系列等，均未建模。

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>建筑白模查看器</title>
+<title>生成效果图</title>
 <style>
   html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#f5f5f5;font-family:"Microsoft YaHei","PingFang SC",sans-serif;}
   #viewer{position:fixed;inset:0;}
@@ -14,10 +14,20 @@
     padding:10px 12px;box-shadow:0 2px 10px rgba(0,0,0,.08);font-size:12px;color:#333;
   }
   #ui h1{font-size:14px;margin:0 0 4px;font-weight:600;}
-  #ui .sub{color:#888;margin-bottom:8px;}
+  #ui .sub{color:#888;margin-bottom:4px;}
   #ui .row{display:flex;align-items:center;gap:6px;margin:3px 0;cursor:pointer;}
   #ui .row input{cursor:pointer;}
-  #ui .sect{margin-top:8px;padding-top:8px;border-top:1px solid #eee;color:#888;}
+  /* 分区折叠：默认只展开第一栏 */
+  #ui details.acc{margin-top:6px;border-top:1px solid #eee;}
+  #ui details.acc > summary{
+    list-style:none;cursor:pointer;user-select:none;padding:7px 0 6px;
+    font-weight:600;color:#333;display:flex;align-items:center;gap:5px;
+  }
+  #ui details.acc > summary::-webkit-details-marker{display:none;}
+  #ui details.acc > summary::before{content:'▸';color:#aaa;font-size:10px;}
+  #ui details.acc[open] > summary::before{content:'▾';}
+  #ui details.acc > summary:hover{color:#000;}
+  #ui .acc-body{padding-bottom:6px;}
   #ui .sbtn{
     padding:4px 0;font-size:12px;border:1px solid #ddd;border-radius:4px;
     background:#fff;color:#333;cursor:pointer;
@@ -59,8 +69,7 @@
   #fileInput,#envFileInput{display:none;}
   .sbtn-row{display:flex;gap:4px;}
   .sbtn-row .sbtn{flex:1;}
-  #envStats{color:#888;margin-top:4px;line-height:1.4;font-size:11px;}
-  #siteStats{color:#888;margin-top:4px;line-height:1.4;font-size:11px;}
+  #warn{display:none;margin-top:6px;color:#b23;font-size:11px;line-height:1.4;}
   #dropzone{
     position:fixed;inset:0;z-index:20;display:none;align-items:center;justify-content:center;
     background:rgba(255,255,255,.92);
@@ -74,87 +83,104 @@
   #status{position:fixed;bottom:12px;left:50%;transform:translateX(-50%);z-index:10;color:#888;font-size:12px;background:rgba(255,255,255,.8);padding:4px 12px;border-radius:12px;}
   #err{position:fixed;inset:0;z-index:30;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.45);color:#fff;font-size:14px;}
   #err .msg{background:#b23;padding:16px 24px;border-radius:8px;max-width:560px;}
-  #legend{position:fixed;right:12px;bottom:12px;z-index:10;background:rgba(255,255,255,.85);border:1px solid #eee;border-radius:8px;padding:8px 10px;font-size:11px;color:#666;}
   /* ?ui=0：只留三维画面（AI 出图的条件图不能带面板文字与提示条） */
-  body.no-ui #ui,body.no-ui #status,body.no-ui #legend{display:none;}
+  body.no-ui #ui,body.no-ui #status{display:none;}
 </style>
 </head>
 <body>
 <div id="viewer"></div>
 
 <div id="ui">
-  <h1>建筑白模查看器</h1>
-  <div class="sub">PlanFundingDrawing JSON → Three.js 白模</div>
-  <button id="loadBtn">选择 / 拖入 JSON 文件</button>
-  <input type="file" id="fileInput" accept=".json,application/json">
-  <div class="sect">周边环境 / 场地（总平面图）</div>
-  <button id="envBtn" title="用地形高程点生成地形面、河床面与水面，并按 DLSS / DLSS-斜坡 图层生成道路与护坡（默认载入 data/site-context.json 的内嵌副本）">载入周边环境 + 场地（默认数据）</button>
-  <input type="file" id="envFileInput" accept=".json,application/json">
-  <div class="sbtn-row">
-    <button id="envFileBtn" class="sbtn" type="button" title="选择其它 site-context JSON（同上格式）">选择文件…</button>
-    <button id="envClearBtn" class="sbtn" type="button" title="移除地形 / 河床 / 水面 / 环境线 / 道路 / 护坡">清除</button>
-  </div>
-  <div id="envStats">未载入</div>
-  <div id="siteStats">未载入</div>
-  <div class="sect">场景（视角镜头）</div>
-  <div id="scene_fixed"></div>
-  <button id="btn_scene_save" class="sbtn" type="button" title="把当前镜头存为自定义场景（按图纸分别保存）">＋ 存为当前镜头</button>
-  <div id="scene_custom"></div>
-  <div class="sect">AI 效果图（阶段③）</div>
-  <div id="ai_stats">检测本地服务…</div>
-  <div id="ai_views"></div>
-  <div class="sbtn-row" style="margin-top:4px;">
-    <button id="ai_all" class="sbtn" type="button" title="勾选全部可用视角（周边环境视角需先载入周边环境）">全选</button>
-    <button id="ai_none" class="sbtn" type="button" title="清空渲染队列">全不选</button>
-  </div>
-  <label class="row" title="条件图：素模必有；深度 / 法线给模型更强的几何约束（该族模型最多接受 3 张参考图）">条件图&nbsp;
-    <span><input type="checkbox" id="ai_ch_color" checked disabled> 素模</span>
-    <span><input type="checkbox" id="ai_ch_depth"> 深度</span>
-    <span><input type="checkbox" id="ai_ch_normal"> 法线</span>
-  </label>
-  <textarea id="ai_prompt" rows="7" spellcheck="false" placeholder="渲染提示词（默认版内嵌在 index.html 的 #aiRenderData，与 data/ai-render.json 一致）"></textarea>
-  <button id="ai_reset" class="sbtn" type="button" style="display:block;width:100%;margin-top:4px;" title="把提示词恢复成默认版（不影响已保存的场景）">恢复默认提示词</button>
-  <button id="ai_go" disabled title="先启动本地桥：node tools/ai-bridge.mjs">生成效果图</button>
-  <div id="ai_out"></div>
-  <div id="ai_preview"></div>
-  <div class="sect">显示控制</div>
-  <div style="display:flex;gap:6px;margin-bottom:6px;">
-    <button id="btn_select_all" style="flex:1;padding:4px;font-size:12px;border:1px solid #ddd;border-radius:4px;background:#fff;cursor:pointer;">全选</button>
-    <button id="btn_deselect_all" style="flex:1;padding:4px;font-size:12px;border:1px solid #ddd;border-radius:4px;background:#fff;cursor:pointer;">取消全选</button>
-  </div>
-  <label class="row">出图通道&nbsp;<select id="sel_channel" style="flex:1;padding:2px;font-size:12px;border:1px solid #ddd;border-radius:4px;background:#fff;color:#333;">
-    <option value="color">素模（彩色）</option>
-    <option value="depth">深度 depth</option>
-    <option value="normal">法线 normal</option>
-  </select></label>
-  <label class="row"><input type="checkbox" id="chk_lines" checked> 线稿叠加（黑线通道）</label>
-  <label class="row"><input type="checkbox" id="chk_walls" checked> 墙体（含门窗洞口）</label>
-  <label class="row"><input type="checkbox" id="chk_families" checked> 门窗构件（框/扇/玻璃）</label>
-  <label class="row"><input type="checkbox" id="chk_slabs" checked> 楼板 / 平台</label>
-  <label class="row"><input type="checkbox" id="chk_columns" checked> 结构柱</label>
-  <label class="row"><input type="checkbox" id="chk_roof" checked> 屋面（檐口）</label>
-  <label class="row"><input type="checkbox" id="chk_canopies" checked> 雨篷</label>
-  <label class="row"><input type="checkbox" id="chk_stairs" checked> 楼梯 / 爬梯</label>
-  <label class="row"><input type="checkbox" id="chk_extra" checked> 基础 / 集水坑 / 坡道</label>
-  <label class="row"><input type="checkbox" id="chk_terrain" checked> 周边地形面</label>
-  <label class="row"><input type="checkbox" id="chk_riverbed" checked> 河道河床面</label>
-  <label class="row"><input type="checkbox" id="chk_water" checked> 河道水面</label>
-  <label class="row"><input type="checkbox" id="chk_road" checked> 道路（DLSS 面）</label>
-  <label class="row"><input type="checkbox" id="chk_slope" checked> 护坡（场地→河床）</label>
-  <label class="row"><input type="checkbox" id="chk_envlines" checked> 环境线（岸线 / 轮廓）</label>
-  <label class="row"><input type="checkbox" id="chk_annot" checked> 房间标注</label>
-  <div id="stats">尚未加载数据</div>
+  <h1>生成效果图</h1>
+  <div class="sub">PlanFundingDrawing JSON → 白模 → AI 效果图</div>
+
+  <details class="acc" open>
+    <summary>文件管理</summary>
+    <div class="acc-body">
+      <button id="loadBtn" title="选择其它 PlanFundingDrawing JSON 文件；页面打开时已默认载入示例白模，也可把文件直接拖到页面上">载入建筑文件</button>
+      <input type="file" id="fileInput" accept=".json,application/json">
+      <button id="envBtn" title="用地形高程点生成地形面、河床面与水面，并按 DLSS / DLSS-斜坡 图层生成道路与护坡；默认载入 data/site-context.json 的内嵌副本">载入环境文件</button>
+      <input type="file" id="envFileInput" accept=".json,application/json">
+      <div class="sbtn-row">
+        <button id="envFileBtn" class="sbtn" type="button" title="选择其它 site-context JSON（同上格式）">选择文件…</button>
+        <button id="envClearBtn" class="sbtn" type="button" title="移除地形 / 河床 / 水面 / 环境线 / 道路 / 护坡">清除环境</button>
+      </div>
+    </div>
+  </details>
+
+  <details class="acc">
+    <summary>模型列表</summary>
+    <div class="acc-body">
+      <div style="display:flex;gap:6px;margin-bottom:6px;">
+        <button id="btn_select_all" style="flex:1;padding:4px;font-size:12px;border:1px solid #ddd;border-radius:4px;background:#fff;cursor:pointer;">全选</button>
+        <button id="btn_deselect_all" style="flex:1;padding:4px;font-size:12px;border:1px solid #ddd;border-radius:4px;background:#fff;cursor:pointer;">取消全选</button>
+      </div>
+      <label class="row"><input type="checkbox" id="chk_walls" checked> 墙体（含门窗洞口）</label>
+      <label class="row"><input type="checkbox" id="chk_families" checked> 门窗构件（框/扇/玻璃）</label>
+      <label class="row"><input type="checkbox" id="chk_slabs" checked> 楼板 / 平台</label>
+      <label class="row"><input type="checkbox" id="chk_columns" checked> 结构柱</label>
+      <label class="row"><input type="checkbox" id="chk_roof" checked> 屋面（檐口）</label>
+      <label class="row"><input type="checkbox" id="chk_canopies" checked> 雨篷</label>
+      <label class="row"><input type="checkbox" id="chk_stairs" checked> 楼梯 / 爬梯</label>
+      <label class="row"><input type="checkbox" id="chk_extra" checked> 基础 / 集水坑 / 坡道</label>
+      <label class="row"><input type="checkbox" id="chk_terrain" checked> 周边地形面</label>
+      <label class="row"><input type="checkbox" id="chk_riverbed" checked> 河道河床面</label>
+      <label class="row"><input type="checkbox" id="chk_water" checked> 河道水面</label>
+      <label class="row"><input type="checkbox" id="chk_road" checked> 道路（DLSS 面）</label>
+      <label class="row"><input type="checkbox" id="chk_slope" checked> 护坡（场地→河床）</label>
+      <label class="row"><input type="checkbox" id="chk_envlines" checked> 环境线（岸线 / 轮廓）</label>
+      <label class="row"><input type="checkbox" id="chk_annot" checked> 房间标注</label>
+    </div>
+  </details>
+
+  <details class="acc">
+    <summary>场景列表</summary>
+    <div class="acc-body">
+      <div id="scene_fixed"></div>
+      <button id="btn_scene_save" class="sbtn" type="button" title="把当前镜头存为自定义场景（按图纸分别保存）">＋ 存为当前镜头</button>
+      <div id="scene_custom"></div>
+    </div>
+  </details>
+
+  <details class="acc">
+    <summary>显示样式</summary>
+    <div class="acc-body">
+      <label class="row"><input type="radio" name="disp_style" id="disp_color" value="color" checked> 素模（白模实体）</label>
+      <label class="row"><input type="radio" name="disp_style" id="disp_lines" value="lines"> 线稿（全部模型描边）</label>
+      <label class="row"><input type="radio" name="disp_style" id="disp_depth" value="depth"> 深度（近白远黑）</label>
+      <label class="row"><input type="radio" name="disp_style" id="disp_normal" value="normal"> 法线（视野空间）</label>
+    </div>
+  </details>
+
+  <details class="acc">
+    <summary>渲染出图</summary>
+    <div class="acc-body">
+      <div id="ai_stats">检测本地服务…</div>
+      <div id="ai_views"></div>
+      <div class="sbtn-row" style="margin-top:4px;">
+        <button id="ai_all" class="sbtn" type="button" title="勾选全部可用视角（周边环境视角需先载入环境文件）">全选</button>
+        <button id="ai_none" class="sbtn" type="button" title="清空渲染队列">全不选</button>
+      </div>
+      <textarea id="ai_prompt" rows="6" spellcheck="false" placeholder="渲染提示词（默认版内嵌在 index.html 的 #aiRenderData，与 data/ai-render.json 一致）"></textarea>
+      <button id="ai_reset" class="sbtn" type="button" style="display:block;width:100%;margin-top:4px;" title="把提示词恢复成默认版（不影响已保存的场景）">恢复默认提示词</button>
+      <div class="ai-dim" style="margin-top:6px;" title="条件图固定为素模截图；需要深度 / 法线条件时走命令行">条件图：素模（固定）</div>
+      <button id="ai_go" disabled title="先启动本地桥：node tools/ai-bridge.mjs">生成效果图</button>
+      <div id="ai_out"></div>
+      <div id="ai_preview"></div>
+    </div>
+  </details>
+
+  <div id="warn"></div>
 </div>
 
 <div id="dropzone">
   <div class="box">
     <h2>把 JSON 文件拖到这里</h2>
-    <div>或点击左侧“选择 / 拖入 JSON 文件”</div>
+    <div>或点击左侧“载入建筑文件”</div>
   </div>
 </div>
 
 <div id="status">左键旋转 · 右键平移 · 滚轮缩放</div>
-<div id="legend"></div>
 <div id="err"><div class="msg" id="errMsg"></div></div>
 
 <script src="lib/three.min.js"></script>

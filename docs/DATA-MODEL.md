@@ -18,7 +18,7 @@
 
 | 字段 | 是否使用 | 用途 |
 | --- | --- | --- |
-| DrawingName | 使用 | 页面标题与统计栏 |
+| DrawingName | 使用 | 页面标题（`document.title`）与 `WMShot.stats()` 摘要 |
 | ViewFrames[] | 使用 | 唯一的数据入口；每个图框含 ViewKind / ViewTypeName / Elements[] |
 | DrawElementBounds | 未使用 | 可用于视图自适应，当前用固定相机 |
 | DrawingPath / SourceDrawingPath / WaterMachineSourceDrawingPath / ElectricalSourceDrawingPath | 未使用 | 图纸溯源信息 |
@@ -199,7 +199,7 @@ JSON.stringify(WMShot.familyCheck())   // → {"pieces":78,"offenders":0,"detail
 | 钢梯踏步 | Box 序列 | SteelStairObject.InsertionPoint | 固定 **3 级**；踏步高 300、进深 300；宽 800（±400）；起点 `(x, y − 450)`，沿 +Y 排布 |
 | 钢爬梯 | 两根立柱 + 踏棍 | SteelLadderObject.InsertionPoint | 立柱截面 60×60、间距 600；总高固定 **3200**；踏棍自 200 起每 **300** 一根，截面 480×60×40；`FacingNormal` 未使用 |
 | 设备基础 | Box | PumpFoundationObject.Bounds | 高固定 300（`L.base → L.base + 300`） |
-| 集水坑 | 开口盒（四壁 + 底板，非布尔运算） | SumpPitObject.Bounds、ElevationMm | 壁厚 100、底板厚 100；顶 = `L.base`；底 = ElevationMm 换算为 `L.sump`；ElevationMm 缺失或非数值时回退 −1500 并在统计栏告警 |
+| 集水坑 | 开口盒（四壁 + 底板，非布尔运算） | SumpPitObject.Bounds、ElevationMm | 壁厚 100、底板厚 100；顶 = `L.base`；底 = ElevationMm 换算为 `L.sump`；ElevationMm 缺失或非数值时回退 −1500 并告警（Console；面板「模型列表」栏底部显示告警条数） |
 | ~~地面 / 散水~~ | — | — | **已删除**（2026-09-24）：原回字形环带与新场地/道路重叠、混淆，用户要求删除；建筑周边场地与道路改由总平面图 DLSS 图层生成，见第 14 节 |
 | 房间轮廓 / 房间名 | LineLoop + Sprite | RoomOutlineObject.Outline、RoomName | 轮廓线 z = 房间楼面 + 6；文字精灵 scale 1100；楼面 = 名称含「水泵间」→ `L.base`，否则 `L.south` |
 | 检修平台标注 | LineLoop + Sprite | MaintenancePlatformObject.Bounds | 线 z = `L.south + 6`；文字「检修平台」scale 900 |
@@ -214,7 +214,7 @@ JSON.stringify(WMShot.familyCheck())   // → {"pieces":78,"offenders":0,"detail
 | 光照 | HemisphereLight(0xffffff, 0xcfcfcf, 1.05) + DirectionalLight 1.25 @ (12000, 22000, 10000)，阴影贴图 2048²、正交阴影范围 ±16000 ⚠ 硬编码；**载入周边环境后改为 ±90000**（`setShadowExtent`，灯位不动：原点 ±90 m 已覆盖地形盒） |
 | 渲染器 | PCFSoftShadowMap、sRGBEncoding、ACESFilmicToneMapping、exposure 1.05、pixelRatio ≤ 2 |
 | 材质 | 墙 0xffffff / 板 0xf3f3f3 / 屋面 0xeeeeee / 柱 0xfafafa / 坡道 0xdedede / 玻璃 0xf2f2f2 透明 0.45；周边环境：地形 0x5c5c5c / 河床 0x444444 / 水面 0x38508c（roughness 0.15、透明 0.8、双面）/ 环境线 0x9a9a9a；道路 0x5a5a5a / 护坡 0x707070（两张面均 DoubleSide + `polygonOffset −1/−1`：它们与地形到处近共面，不加偏置远场会闪成"梳齿"带） |
-| 线稿叠加 | `EdgesGeometry(geo, 30)`（二面角阈值 30°）黑色线；**分组名单 8 个**：walls / slabs / columns / roof / canopies / stairs / extra / families（新增实体分组必须同步该名单，否则新构件没有线稿）；默认隐藏，`?lines=1` 或勾选显示 |
+| 线稿 | `EdgesGeometry(geo, 30)`（二面角阈值 30°）黑色线，挂到各 mesh 下。**建筑名单 8 个**：walls / slabs / columns / roof / canopies / stairs / extra / families（`BUILDING_EDGE_GROUPS`，新增实体分组必须同步，否则新构件没有线稿）；**周边名单 5 个**：terrain / riverBed / riverWater / road / slope（各自 buildEnv / buildSite 时生成）。默认随「显示样式 → 素模」隐藏，「线稿」或 `?lines=1` 显示；重复载入环境/场地时旧线稿由 `dropDetachedOverlays()` 随分组回收 |
 | depth 通道 | 自定义线性着色 ShaderMaterial：`uNear = max(相机到目标距离 − 包围盒跨度, 1)`、`uFar = 距离 + 跨度 × 1.2`，近白远黑、背景纯黑；跨度取建筑包围盒，**载入周边环境后取「建筑 ∪ 地形盒」并集**（≈136 m，深度分辨率随之降到 ≈1.2 m/级，水面与河床的 1 m 落差已落到量化极限以下） |
 | normal 通道 | MeshNormalMaterial（视野空间法线） |
 | 视图预设 | 12 个：`iso-{ne,nw,se,sw}` / `elev-{s,n,w,e}` / `persp-1` / `persp-2` / `env-iso`（周边鸟瞰）/ `env-river`（河道视角），全部由 `state.bounds`（env 两个用 `state.envBounds`）推导，不依赖硬编码尺寸；env 两个需要先载入周边环境 |
@@ -293,7 +293,7 @@ JSON.stringify(WMShot.familyCheck())   // → {"pieces":78,"offenders":0,"detail
 | `model` | `qwen-image-3.0` | 模型名；能力表见 `tools/ai/dashscope.mjs` 的 `MODEL_CAPS`（是否接受 `size`/`n`、最多几张参考图）。未知模型按最保守假设（不收 size/n、1 张图）并告警 |
 | `apiKeyEnv` | `DASHSCOPE_API_KEY` | API key 的环境变量名（桥另有 `--key-env`/`--key`）。**key 不进仓库、不进 run.json、不进页面**，日志只打前 3 位 |
 | `page` / `query` | `index.html` / `env=1&annot=0&lines=1&ui=0` | **仅 CLI 用**：白模截图用的页面与查询串（相对 `white-model-viewer/`）；`lines=1` 加强棱边、`annot=0` 去标注、`env=1` 带周边环境、`ui=0` 隐藏左侧面板与提示条（**必须**：cdp-shot 截的是整个视口，带面板会让模型把 UI 也画进效果图）。页面面板不需要它——截图由页面自己出（`WMShot.capture`，只截 canvas），且取当前相机与当前场景开关 |
-| `views` / `channels` | `["iso-ne"]` / `["color"]` | 默认只出 1 视角 1 通道（**每次调用都计费**）。`channels` 同时是「截哪些通道」与「送哪几张条件图」，顺序即 `content` 顺序（图 0 带视角提示词），最多 3 个（受 `MODEL_CAPS.maxImages` 约束）。页面面板是首次打开时的勾选默认值，用户可当场改 |
+| `views` / `channels` | `["iso-ne"]` / `["color"]` | 默认只出 1 视角 1 通道（**每次调用都计费**）。`channels` 同时是「截哪些通道」与「送哪几张条件图」，顺序即 `content` 顺序（图 0 带视角提示词），最多 3 个（受 `MODEL_CAPS.maxImages` 约束）。**页面面板固定送 `["color"]`**（面板已无通道勾选），要试 depth / normal 条件走 CLI `--channels=` |
 | `imageRoles` | 见文件 | 提示词里图序说明的用词（color / depth / normal 各自的角色名） |
 | `viewHints` | `elev-` / `iso-` / `persp-` / `env-` 前缀 | 视角类型提示（正交正视立面 / 俯视鸟瞰 / 地面人视 / 无人机视角），按**名前缀**匹配，只作用于第 1 张图 |
 | `viewLabels` | 见文件 | 12 个预设视角的中文名（页面勾选列表与结果图注都用它；CLI 用 `key`） |
@@ -324,7 +324,7 @@ JSON.stringify(WMShot.familyCheck())   // → {"pieces":78,"offenders":0,"detail
 | `data.roofCanopies` | RoofPolylineObject Kind = 4 | 已解析，未建模；雨篷改由外门自动生成（5.3） |
 | `data.counts` | 所有图元计数 | 仅统计，不参与建模 |
 | terrain（`data/terrain.obj` + `data/terrain-registration.json`） | `js/terrain.js` | 解析与双控制点配准（平移+旋转+等比缩放）已实现，但 **buildModel 尚未接入**，当前样例不渲染地形（地形改由总平面图高程点插值生成，见第 13 节） |
-| site-context（`data/site-context.json`） | `tools/dxf-site-context.mjs` 从总平面图 DXF 提取 | 对位变换、578 个高程点、进水池、河道岸线、陡坎与注记均已解析成坐标数据；**v2 起 `js/environment.js` 已接入**，面板「载入周边环境（默认数据）」生成地形面 / 河床面 / 水面；**v3 起 `js/siteworks.js` 已接入**，同一次载入还生成道路 / 护坡（见第 12、13、14 节） |
+| site-context（`data/site-context.json`） | `tools/dxf-site-context.mjs` 从总平面图 DXF 提取 | 对位变换、578 个高程点、进水池、河道岸线、陡坎与注记均已解析成坐标数据；**v2 起 `js/environment.js` 已接入**，页面首次建模后自动载入（也可用「文件管理」栏的 `载入环境文件` 按钮）生成地形面 / 河床面 / 水面；**v3 起 `js/siteworks.js` 已接入**，同一次载入还生成道路 / 护坡（见第 12、13、14 节） |
 
 ## 7. 标高读取规则
 
@@ -669,7 +669,8 @@ node tools/cdp-shot.mjs "file:///.../index.html?env=1&annot=0" "$env:TEMP/wm-sit
 - 新增/修改门窗族几何：族内坐标只能用 u/v/n（见 5.2），改完**必须**跑 `WMShot.familyCheck()`
   确认 `offenders = 0`，并目视西北/东北鸟瞰；朝向构造别假设 U×V=N，要用 `V×N` 显式取右手基。
 - 新增实体分组：除了在 buildModel 里建组，还要把组名加进 index.html 的图层勾选框与
-  `buildEdgeLines()` 的分组名单，否则没有线稿叠加。
+  `buildEdgeLines()` 的调用名单（建筑的进 `BUILDING_EDGE_GROUPS`，周边的在 buildEnv / buildSite 里单独调），
+  否则没有线稿。
 - 新增外部素材（挑檐截面 / 雨篷截面 / 地形）：既要放 `data/` 下的文件，也要在 index.html 内嵌同样内容的
   `<script type="application/json" id="...">` 占位，否则 file:// 打开会缺数据（`site-context.json` 的内嵌副本
   由 `tools/dxf-site-context.mjs` 自动写回，不要手改）。

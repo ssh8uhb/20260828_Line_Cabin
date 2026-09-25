@@ -118,7 +118,7 @@ try {
   await sleep(waitMs);
 
   const evalRes = await send('Runtime.evaluate', {
-    expression: `JSON.stringify({ title: document.title, stats: (document.getElementById('stats')||{}).innerText || '', canvas: !!document.querySelector('canvas') })`,
+    expression: `JSON.stringify({ title: document.title, stats: (window.WMShot && WMShot.stats ? WMShot.stats() : ''), canvas: !!document.querySelector('canvas') })`,
     returnByValue: true,
   });
   console.log('页面状态:', evalRes.result.value);

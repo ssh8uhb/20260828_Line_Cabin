@@ -59,7 +59,7 @@ node tools/cdp-shot.mjs "file:///D:/Work/Project/20260828_Line_Cabin/white-model
 # 3) 批量出图自检（12 视角 × 3 通道，输出目录 + manifest.json，同样不进仓库）
 node tools/cdp-shot.mjs "file:///D:/Work/Project/20260828_Line_Cabin/white-model-viewer/index.html?annot=0" "$env:TEMP/wm-batch" --views=all --channels=color,depth,normal
 
-# 3b) 带周边环境的截图与批量（地形 / 河床 / 水面 / 道路 / 护坡；?env=1 用内嵌副本，离线可用）
+# 3b) 周边环境截图（地形 / 河床 / 水面 / 道路 / 护坡；页面默认已自动载入，?env=1 是等价写法）
 node tools/cdp-shot.mjs "file:///D:/Work/Project/20260828_Line_Cabin/white-model-viewer/index.html?env=1&annot=0" "$env:TEMP/wm-env.png" 8
 node tools/cdp-shot.mjs "file:///D:/Work/Project/20260828_Line_Cabin/white-model-viewer/index.html?env=1&annot=0" "$env:TEMP/wm-env-batch" --views=all --channels=color,depth,normal
 
@@ -79,8 +79,16 @@ node tools/ai-render.mjs --views=iso-ne --channels=color --mock
 #           out/page-<时间戳>/{white,request,ai,run.json} 四件套齐全，run.json 无任何 key 文本
 ```
 
-判定标准：截图非黑屏、门窗/屋面/楼梯齐全、页面统计栏数字与 JSON 一致
-（当前样本：图框 3、墙体 6、门 5、窗 7、柱 8、楼梯 4）。
+判定标准：截图非黑屏、门窗/屋面/楼梯齐全；模型数量改用 Console 读
+`JSON.stringify(WMShot.stats())`（面板已去掉统计栏），当前样本：
+`图框 3 · 墙体 6 · 门 5 · 窗 7 · 柱 8 · 楼梯 4 · 标高 泵间 0 / 配电 2441 / 屋面 7041 mm`。
+
+**动了线稿 / 显示样式再加一步**：`--eval="WMShot.info()"` 看 `style` 与 `edgeCounts`——五个折叠栏
+（文件管理 / 模型列表 / 场景列表 / 显示样式 / 渲染出图）默认只展开第一栏且**同时只展开一栏**；
+显示样式四选一（素模 / 线稿 / 深度 / 法线），线稿必须覆盖周边模型，基线 `edgeCounts` =
+建筑 8 组（walls 41 / slabs 4 / columns 8 / roof 31 / canopies 3 / stairs 26 / extra 16 / families 78）
++ `terrain 2 / riverBed 1 / riverWater 1 / road 1 / slope 1`（分组名单见 DATA-MODEL.md §5.4 默认值总表）。
+`?lines=1` 等价「显示样式 → 线稿」，`?channel=` 等价深度 / 法线。
 
 **动了门窗族几何（js/families.js）再加一步**：页面 Console 跑 `JSON.stringify(WMShot.familyCheck())`，
 要求 `offenders = 0`（样例基线 78 块）。门窗构件凸出墙面的坑与坐标约定见 docs/DATA-MODEL.md 5.2。

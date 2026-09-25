@@ -42,7 +42,8 @@ AGENTS.md               仓库工作约定（面向接手的 AI Agent）
 ```powershell
 python -m http.server 8123 --directory D:/Work/Project/20260828_Line_Cabin
 # → http://localhost:8123/white-model-viewer/
-# 出图参数：?static=1 固定视角、?lines=1 叠加线稿、?annot=0 去标注、?env=1 载入周边环境（含道路/护坡）、
+# 出图参数：?static=1 固定视角、?lines=1 叠加线稿、?annot=0 去标注、
+#            ?env=1 载入周边环境（含道路/护坡；页面默认已载入，加不加都一样）、
 #            ?ui=0 只留三维画面（AI 出图用，隐藏面板与提示条）、
 #            ?view=iso-ne 等视角预设（含 env-iso/env-river）、?channel=color/depth/normal、?bg=ffffff 背景色
 ```
