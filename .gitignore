@@ -7,6 +7,12 @@ Thumbs.db
 white-model-viewer/shot*.png
 white-model-viewer/*.tmp
 
+# AI 出图产物（白模截图 + 效果图 + run.json，保留在本地，不提交）
+white-model-viewer/out/
+
+# 本地 API key 文件（start-ai-bridge.cmd 会读，绝不提交）
+white-model-viewer/.dashscope-key
+
 
 # 第三方参考仓库
 pure-line-room/

@@ -1171,6 +1171,55 @@ window.WMShot = {
     return true;
   },
   channel: setChannel,
+  /* 清掉 OrbitControls 的阻尼残余：AI 出图面板在摆机位之前调用，
+   * 否则用户上一次拖拽的残余会在之后几帧里把机位推离预设。 */
+  settle: function () {
+    const d = controls.enableDamping;
+    controls.enableDamping = false;
+    controls.update();
+    controls.enableDamping = d;
+    return true;
+  },
+  /* 页面内截图（AI 出图用）：临时把渲染尺寸切到 size，逐通道导出 dataURL。
+   * 全程同步（不让出帧），所以中途看不到尺寸突变；返回 {size, images:{color|depth|normal: dataURL}} */
+  capture: function (size, channels) {
+    if (!state.modelBuilt) return null;
+    let w = 1600, h = 900;
+    if (typeof size === 'string' && /^\d+\*\d+$/.test(size.trim())) {
+      const p = size.trim().split('*');
+      w = Math.max(64, Math.round(Number(p[0])));
+      h = Math.max(64, Math.round(Number(p[1])));
+    }
+    const chs = (Array.isArray(channels) && channels.length ? channels : ['color'])
+      .filter(c => ['color', 'depth', 'normal'].indexOf(c) >= 0);
+    const out = {};
+    const pr = renderer.getPixelRatio(), aspect = camera.aspect, ch = state.channel;
+    try {
+      renderer.setPixelRatio(1);
+      renderer.setSize(w, h, false);
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
+      for (const c of chs) {
+        setChannel(c);
+        out[c] = renderer.domElement.toDataURL('image/png');
+      }
+    } finally {
+      setChannel(ch);
+      renderer.setPixelRatio(pr);
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      camera.aspect = aspect;
+      camera.updateProjectionMatrix();
+      renderer.render(scene, camera);
+    }
+    return { size: { width: w, height: h }, images: out };
+  },
+  /* 当前图纸信息（AI 出图的 run.json 记录用） */
+  doc: function () {
+    return JSON.stringify({
+      name: state.drawingName || '', title: document.title, href: location.href,
+      ready: !!state.modelBuilt, env: !!state.envOn, site: !!state.siteOn,
+    });
+  },
   /* 周边环境接口：载入 / 清除 / 读取统计 */
   env: function () {
     return JSON.stringify({ on: state.envOn, bounds: state.envBounds, stats: state.envStats });
@@ -1755,6 +1804,7 @@ function bindUI() {
   function applyUrlParams() {
     const p = new URLSearchParams(location.search);
     if (p.get('lines') === '1') setLinesVisible(true);
+    if (p.get('ui') === '0') document.body.classList.add('no-ui');
     if (p.get('annot') === '0') {
       const g = state.groups.annot;
       if (g) g.visible = false;

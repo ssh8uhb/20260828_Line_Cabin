@@ -1,0 +1,49 @@
+{
+  "version": 2,
+  "provider": "dashscope",
+  "baseUrl": "https://dashscope.aliyuncs.com",
+  "endpoint": "/api/v1/services/aigc/multimodal-generation/generation",
+  "model": "qwen-image-3.0",
+  "apiKeyEnv": "DASHSCOPE_API_KEY",
+
+  "page": "index.html",
+  "query": "env=1&annot=0&lines=1&ui=0",
+  "views": ["iso-ne"],
+  "channels": ["color"],
+
+  "bridge": { "host": "127.0.0.1", "port": 8787 },
+  "captureSize": "1600*900",
+
+  "imageRoles": {
+    "color": "建筑白模素模截图",
+    "depth": "深度图（近白远黑，用于锁定几何）",
+    "normal": "视空间法线图（用于锁定朝向）"
+  },
+  "viewHints": {
+    "elev-": "正交正视立面",
+    "iso-": "俯视鸟瞰",
+    "persp-": "地面人视照片，视高 1.7 m",
+    "env-": "无人机视角"
+  },
+  "viewLabels": {
+    "iso-ne": "东北鸟瞰", "iso-nw": "西北鸟瞰", "iso-se": "东南鸟瞰", "iso-sw": "西南鸟瞰",
+    "elev-s": "南立面", "elev-n": "北立面", "elev-w": "西立面", "elev-e": "东立面",
+    "persp-1": "人视 1（正南）", "persp-2": "人视 2（东南）",
+    "env-iso": "周边鸟瞰", "env-river": "河道视角"
+  },
+
+  "prompt": "Architectural rendering of a small irrigation pump station by the river, high angle view, bird's eye view. The building features white walls and grey sloped roofs, concrete sluice gate structure, metal railings. Surrounded by lush green trees and manicured landscaping bushes. Concrete embankment, calm water surface with reflections. A paved driveway with a parked car. Soft natural daylight, realistic textures, 3D visualization, V-Ray render style, high quality, 8k resolution, architectural design presentation. --ar 16:9",
+  "promptSuffix": "只做材质、灯光、天空与配景的写实化渲染：保持建筑几何、体量、开间比例、门窗数量与位置、屋面形状与画面构图完全不变，不要添加、删除或改动任何建筑构件，不要改变相机视角。",
+
+  "negativePrompt": "",
+  "size": "auto",
+  "n": 1,
+  "promptExtend": true,
+  "watermark": false,
+  "seed": null,
+
+  "waitSeconds": 8,
+  "timeoutSec": 180,
+  "retries": 1,
+  "intervalMs": 1500
+}

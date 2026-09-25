@@ -32,6 +32,25 @@
   .scn-row .scn-del:hover{color:#b23;border-color:#e0b4b4;background:#fdf3f3;}
   .scn-empty{color:#aaa;margin-top:4px;}
   #stats{margin-top:8px;padding-top:8px;border-top:1px solid #eee;color:#666;line-height:1.5;max-height:160px;overflow:auto;}
+  #ai_stats{margin-top:4px;color:#888;line-height:1.45;font-size:11px;}
+  #ai_stats code{background:#f2f2f2;padding:0 3px;border-radius:3px;}
+  .ai-ok{color:#2a7a2a;}
+  .ai-bad{color:#b23;}
+  .ai-dim,.ai-path{color:#999;word-break:break-all;}
+  #ai_views{max-height:112px;overflow:auto;border:1px solid #eee;border-radius:4px;padding:2px 4px;margin-top:4px;}
+  .ai-vrow{display:flex;align-items:center;gap:4px;line-height:1.8;white-space:nowrap;}
+  .ai-vrow .ai-vname{flex:1;overflow:hidden;text-overflow:ellipsis;cursor:pointer;}
+  .ai-vrow .ai-vkey{color:#bbb;font-size:10px;}
+  .ai-vrow .ai-eye{width:24px;padding:0;font-size:11px;flex:none;}
+  #ai_prompt{width:100%;box-sizing:border-box;margin-top:4px;padding:4px;font-size:11px;line-height:1.4;
+    font-family:inherit;border:1px solid #ddd;border-radius:4px;resize:vertical;color:#333;}
+  #ai_go{display:block;width:100%;margin:6px 0 0;padding:6px 0;border:1px solid #bbb;border-radius:6px;
+    background:#f7f7f7;color:#333;cursor:pointer;font-size:12px;}
+  #ai_go:hover:not(:disabled){background:#eef2f7;}
+  #ai_go:disabled{border-style:dashed;color:#bbb;background:#fafafa;cursor:default;}
+  #ai_out{color:#888;font-size:11px;line-height:1.5;margin-top:4px;}
+  #ai_preview img{width:100%;display:block;border:1px solid #eee;border-radius:4px;margin-top:6px;cursor:zoom-in;}
+  #ai_preview .ai-cap{color:#888;font-size:11px;line-height:1.45;margin-top:3px;}
   #loadBtn,#envBtn{
     display:block;width:100%;margin:6px 0;padding:6px 0;border:1px dashed #aaa;border-radius:6px;
     background:#fafafa;color:#555;cursor:pointer;font-size:12px;
@@ -56,6 +75,8 @@
   #err{position:fixed;inset:0;z-index:30;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.45);color:#fff;font-size:14px;}
   #err .msg{background:#b23;padding:16px 24px;border-radius:8px;max-width:560px;}
   #legend{position:fixed;right:12px;bottom:12px;z-index:10;background:rgba(255,255,255,.85);border:1px solid #eee;border-radius:8px;padding:8px 10px;font-size:11px;color:#666;}
+  /* ?ui=0：只留三维画面（AI 出图的条件图不能带面板文字与提示条） */
+  body.no-ui #ui,body.no-ui #status,body.no-ui #legend{display:none;}
 </style>
 </head>
 <body>
@@ -79,6 +100,23 @@
   <div id="scene_fixed"></div>
   <button id="btn_scene_save" class="sbtn" type="button" title="把当前镜头存为自定义场景（按图纸分别保存）">＋ 存为当前镜头</button>
   <div id="scene_custom"></div>
+  <div class="sect">AI 效果图（阶段③）</div>
+  <div id="ai_stats">检测本地服务…</div>
+  <div id="ai_views"></div>
+  <div class="sbtn-row" style="margin-top:4px;">
+    <button id="ai_all" class="sbtn" type="button" title="勾选全部可用视角（周边环境视角需先载入周边环境）">全选</button>
+    <button id="ai_none" class="sbtn" type="button" title="清空渲染队列">全不选</button>
+  </div>
+  <label class="row" title="条件图：素模必有；深度 / 法线给模型更强的几何约束（该族模型最多接受 3 张参考图）">条件图&nbsp;
+    <span><input type="checkbox" id="ai_ch_color" checked disabled> 素模</span>
+    <span><input type="checkbox" id="ai_ch_depth"> 深度</span>
+    <span><input type="checkbox" id="ai_ch_normal"> 法线</span>
+  </label>
+  <textarea id="ai_prompt" rows="7" spellcheck="false" placeholder="渲染提示词（默认版内嵌在 index.html 的 #aiRenderData，与 data/ai-render.json 一致）"></textarea>
+  <button id="ai_reset" class="sbtn" type="button" style="display:block;width:100%;margin-top:4px;" title="把提示词恢复成默认版（不影响已保存的场景）">恢复默认提示词</button>
+  <button id="ai_go" disabled title="先启动本地桥：node tools/ai-bridge.mjs">生成效果图</button>
+  <div id="ai_out"></div>
+  <div id="ai_preview"></div>
   <div class="sect">显示控制</div>
   <div style="display:flex;gap:6px;margin-bottom:6px;">
     <button id="btn_select_all" style="flex:1;padding:4px;font-size:12px;border:1px solid #ddd;border-radius:4px;background:#fff;cursor:pointer;">全选</button>
@@ -4262,8 +4300,38 @@
     }
   ]
 }</script>
+<script type="application/json" id="aiRenderData">{
+  "version": 2,
+  "note": "AI 效果图面板的离线默认值（内嵌副本，与 data/ai-render.json 保持一致；桥连上后以桥的 /ai-render/config 为准）。桥端口必须与 tools/ai-bridge.mjs 一致（默认 8787）。",
+  "bridge": { "host": "127.0.0.1", "port": 8787 },
+  "provider": "dashscope",
+  "model": "qwen-image-3.0",
+  "captureSize": "1600*900",
+  "views": ["iso-ne"],
+  "channels": ["color"],
+  "prompt": "Architectural rendering of a small irrigation pump station by the river, high angle view, bird's eye view. The building features white walls and grey sloped roofs, concrete sluice gate structure, metal railings. Surrounded by lush green trees and manicured landscaping bushes. Concrete embankment, calm water surface with reflections. A paved driveway with a parked car. Soft natural daylight, realistic textures, 3D visualization, V-Ray render style, high quality, 8k resolution, architectural design presentation. --ar 16:9",
+  "promptSuffix": "只做材质、灯光、天空与配景的写实化渲染：保持建筑几何、体量、开间比例、门窗数量与位置、屋面形状与画面构图完全不变，不要添加、删除或改动任何建筑构件，不要改变相机视角。",
+  "imageRoles": {
+    "color": "建筑白模素模截图",
+    "depth": "深度图（近白远黑，用于锁定几何）",
+    "normal": "视空间法线图（用于锁定朝向）"
+  },
+  "viewHints": {
+    "elev-": "正交正视立面",
+    "iso-": "俯视鸟瞰",
+    "persp-": "地面人视照片，视高 1.7 m",
+    "env-": "无人机视角"
+  },
+  "viewLabels": {
+    "iso-ne": "东北鸟瞰", "iso-nw": "西北鸟瞰", "iso-se": "东南鸟瞰", "iso-sw": "西南鸟瞰",
+    "elev-s": "南立面", "elev-n": "北立面", "elev-w": "西立面", "elev-e": "东立面",
+    "persp-1": "人视 1（正南）", "persp-2": "人视 2（东南）",
+    "env-iso": "周边鸟瞰", "env-river": "河道视角"
+  }
+}</script>
 <script src="js/environment.js"></script>
 <script src="js/siteworks.js"></script>
 <script src="js/white-model.js"></script>
+<script src="js/ai-panel.js"></script>
 </body>
 </html>

@@ -1,0 +1,2 @@
+# Windows 批处理必须保持 CRLF：LF 换行会让 cmd.exe 解析出错，双击启动失败
+*.cmd text eol=crlf
